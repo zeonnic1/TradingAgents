@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TradingAgents Crypto Hub</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #18202a;
+      --muted: #667085;
+      --line: #d9dee7;
+      --accent: #0f766e;
+      --accent-2: #2563eb;
+      --danger: #b42318;
+      --warn: #b54708;
+      --ok: #087443;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      letter-spacing: 0;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    h1 { margin: 0; font-size: 20px; font-weight: 750; }
+    main {
+      display: grid;
+      grid-template-columns: 340px minmax(0, 1fr);
+      min-height: calc(100vh - 65px);
+    }
+    aside {
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+      padding: 20px;
+    }
+    section { padding: 20px 24px; }
+    label {
+      display: block;
+      margin: 14px 0 6px;
+      font-size: 13px;
+      font-weight: 650;
+      color: #344054;
+    }
+    select, input {
+      width: 100%;
+      height: 38px;
+      border: 1px solid #c6ccd7;
+      border-radius: 6px;
+      padding: 0 10px;
+      background: #fff;
+      color: var(--text);
+      font-size: 14px;
+    }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 18px;
+    }
+    button {
+      height: 38px;
+      border: 0;
+      border-radius: 6px;
+      cursor: pointer;
+      color: #fff;
+      background: var(--accent);
+      font-weight: 700;
+    }
+    button.secondary { background: var(--accent-2); }
+    button.ghost {
+      color: #344054;
+      background: #eef2f6;
+      border: 1px solid var(--line);
+    }
+    button.danger {
+      background: var(--danger);
+    }
+    button.compact {
+      height: 30px;
+      padding: 0 10px;
+      font-size: 12px;
+    }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--warn);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .card, .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .card { min-height: 92px; }
+    .panel { margin-bottom: 16px; }
+    .card h2, .panel h2 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      color: #344054;
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .panel-head h2 { margin: 0; }
+    .metric {
+      font-size: 24px;
+      font-weight: 800;
+      line-height: 1.2;
+    }
+    .muted { color: var(--muted); font-size: 13px; }
+    .list {
+      margin: 0;
+      padding-left: 18px;
+      line-height: 1.6;
+      color: #344054;
+    }
+    pre {
+      margin: 0;
+      overflow: auto;
+      max-height: 240px;
+      padding: 12px;
+      border-radius: 6px;
+      background: #101828;
+      color: #eef4ff;
+      font-size: 12px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      padding: 9px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      white-space: nowrap;
+    }
+    th { color: #475467; font-weight: 750; background: #f8fafc; }
+    .table-wrap { overflow: auto; }
+    .buy, .positive, .profit, .completed, .info { color: var(--ok); }
+    .sell, .negative, .failed, .drawdown, .error { color: var(--danger); }
+    .hold, .queued, .pending, .ordered, .running, .watching, .warn, .canceled { color: var(--warn); }
+    @media (max-width: 1000px) {
+      main { grid-template-columns: 1fr; }
+      aside { border-right: 0; border-bottom: 1px solid var(--line); }
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 560px) {
+      header { align-items: flex-start; flex-direction: column; }
+      .grid, .row, .actions { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>TradingAgents Crypto Hub</h1>
+    <div class="status"><span class="dot" id="healthDot"></span><span id="healthText">checking</span></div>
+  </header>
+  <main>
+    <aside>
+      <form id="controlForm">
+        <label for="exchange">交易所</label>
+        <select id="exchange" name="exchange">
+          <option value="binance">Binance</option>
+          <option value="okx">OKX</option>
+          <option value="bybit">Bybit</option>
+        </select>
+
+        <label for="symbol">交易对</label>
+        <input id="symbol" name="symbol" value="BTC/USDT" />
+
+        <div class="row">
+          <div>
+            <label for="timeframe">周期</label>
+            <select id="timeframe" name="timeframe">
+              <option>1m</option>
+              <option>5m</option>
+              <option selected>15m</option>
+              <option>1h</option>
+              <option>4h</option>
+              <option>1d</option>
+            </select>
+          </div>
+          <div>
+            <label for="limit">K线数量</label>
+            <input id="limit" name="limit" type="number" min="60" max="1000" value="300" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="amount">合约金额 (USDT)</label>
+            <input id="amount" name="amount" type="number" min="0" step="1" value="0" />
+          </div>
+          <div>
+            <label for="leverage">合约杠杆</label>
+            <input id="leverage" name="leverage" type="number" min="1" max="125" value="1" />
+          </div>
+        </div>
+
+        <label for="transaction">Transaction</label>
+        <select id="transaction" name="transaction">
+          <option value="false">只分析</option>
+          <option value="true">允许交易</option>
+        </select>
+
+        <label for="useLlmDecision">LLM参与决策</label>
+        <select id="useLlmDecision" name="useLlmDecision">
+          <option value="true">启用</option>
+          <option value="false">禁用</option>
+        </select>
+
+        <div class="actions">
+          <button type="submit">分析/运行</button>
+          <button class="secondary" type="button" id="asyncBtn">异步运行</button>
+        </div>
+        <div class="actions">
+          <button class="secondary" type="button" id="llmBtn">LLM决策</button>
+          <button class="ghost" type="button" id="balanceBtn">校验资金</button>
+        </div>
+        <div class="actions">
+          <button class="ghost" type="button" id="refreshBtn">刷新数据</button>
+          <button class="ghost" type="button" id="taskCenterSideBtn">刷新任务</button>
+        </div>
+      </form>
+    </aside>
+    <section>
+      <div class="grid">
+        <div class="card">
+          <h2>动作</h2>
+          <div class="metric hold" id="action">HOLD</div>
+        </div>
+        <div class="card">
+          <h2>置信度</h2>
+          <div class="metric" id="confidence">0%</div>
+        </div>
+        <div class="card">
+          <h2>偏见</h2>
+          <div class="metric" id="bias">neutral</div>
+        </div>
+        <div class="card">
+          <h2>模式</h2>
+          <div class="muted" id="setup">waiting</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>交易所资金</h2>
+          <span class="muted" id="balanceHint">未校验</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>资产</th>
+                <th>可用</th>
+                <th>占用</th>
+                <th>总额</th>
+              </tr>
+            </thead>
+            <tbody id="balanceBody">
+              <tr><td colspan="4" class="muted">点击“校验资金”获取账户资金。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>交易计划</h2>
+        <div class="grid">
+          <div><div class="muted">Entry</div><strong id="entry">-</strong></div>
+          <div><div class="muted">Stop</div><strong id="stop">-</strong></div>
+          <div><div class="muted">TP1</div><strong id="tp1">-</strong></div>
+          <div><div class="muted">TP2</div><strong id="tp2">-</strong></div>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h2>订单数</h2>
+          <div class="metric" id="totalOrders">0</div>
+        </div>
+        <div class="card">
+          <h2>名义价值</h2>
+          <div class="metric" id="notional">0</div>
+        </div>
+        <div class="card">
+          <h2>保证金占用</h2>
+          <div class="metric" id="marginUsed">0</div>
+        </div>
+        <div class="card">
+          <h2>未实现收益</h2>
+          <div class="metric" id="unrealizedPnl">0</div>
+          <div class="muted" id="unrealizedRoe">ROE 0%</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>理由</h2>
+        <ul class="list" id="reasons"><li>等待分析结果。</li></ul>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>任务中心</h2>
+          <button class="ghost" type="button" id="taskCenterBtn">刷新任务</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>任务ID</th>
+                <th>状态</th>
+                <th>交易所</th>
+                <th>交易对</th>
+                <th>周期</th>
+                <th>执行</th>
+                <th>杠杆</th>
+                <th>更新时间</th>
+                <th>错误</th>
+                <th>LLM开关</th>
+                <th>LLM</th>
+                <th>操作</th>
+                <th>删除</th>
+              </tr>
+            </thead>
+            <tbody id="tasksBody">
+              <tr><td colspan="13" class="muted">暂无任务。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>异步任务日志</h2>
+          <span class="muted">展示最近日志</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>任务ID</th>
+                <th>级别</th>
+                <th>消息</th>
+              </tr>
+            </thead>
+            <tbody id="logsBody">
+              <tr><td colspan="4" class="muted">暂无日志。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>订单监听</h2>
+          <span class="muted">根据最新行情计算监听状态</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>订单ID</th>
+                <th>交易所</th>
+                <th>交易对</th>
+                <th>方向</th>
+                <th>状态</th>
+                <th>入场</th>
+                <th>现价</th>
+                <th>收益</th>
+                <th>ROE</th>
+                <th>监听</th>
+              </tr>
+            </thead>
+            <tbody id="watchBody">
+              <tr><td colspan="10" class="muted">暂无监听订单。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>历史订单与收益</h2>
+          <span class="muted" id="historyHint">显示全部记录</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>交易所</th>
+                <th>交易对</th>
+                <th>方向</th>
+                <th>合约金额</th>
+                <th>杠杆</th>
+                <th>入场</th>
+                <th>现价</th>
+                <th>收益</th>
+                <th>ROE</th>
+                <th>模式</th>
+              </tr>
+            </thead>
+            <tbody id="ordersBody">
+              <tr><td colspan="11" class="muted">暂无订单。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>LLM Trader / Portfolio 决策</h2>
+          <span class="muted" id="llmHint">等待手动触发</span>
+        </div>
+        <div class="grid">
+          <div><div class="muted">批准</div><strong id="llmApproved">-</strong></div>
+          <div><div class="muted">动作</div><strong id="llmAction">-</strong></div>
+          <div><div class="muted">风险</div><strong id="llmRisk">-</strong></div>
+          <div><div class="muted">建议杠杆</div><strong id="llmLeverage">-</strong></div>
+        </div>
+        <div class="grid">
+          <div><div class="muted">Entry</div><strong id="llmEntry">-</strong></div>
+          <div><div class="muted">Stop</div><strong id="llmStop">-</strong></div>
+          <div><div class="muted">TP1</div><strong id="llmTp1">-</strong></div>
+          <div><div class="muted">TP2</div><strong id="llmTp2">-</strong></div>
+        </div>
+        <div class="muted">Trader</div>
+        <p id="llmTrader">-</p>
+        <div class="muted">Portfolio Manager</div>
+        <p id="llmPortfolio">-</p>
+        <ul class="list" id="llmWarnings"><li>暂无风控提示。</li></ul>
+      </div>
+
+      <div class="panel">
+        <h2>原始响应</h2>
+        <pre id="raw">{}</pre>
+      </div>
+    </section>
+  </main>
+  <script>
+    const form = document.getElementById("controlForm");
+    const asyncBtn = document.getElementById("asyncBtn");
+    const llmBtn = document.getElementById("llmBtn");
+    const balanceBtn = document.getElementById("balanceBtn");
+    const refreshBtn = document.getElementById("refreshBtn");
+    const taskCenterBtn = document.getElementById("taskCenterBtn");
+    const taskCenterSideBtn = document.getElementById("taskCenterSideBtn");
+    let taskSocket = null;
+    let lastAnalysisPayload = null;
+    let taskCenterState = { tasks: [], logs: [], watched_orders: [] };
+
+    function payload() {
+      const data = new FormData(form);
+      return {
+        exchange: data.get("exchange"),
+        symbol: data.get("symbol"),
+        timeframe: data.get("timeframe"),
+        limit: Number(data.get("limit")),
+        amount: Number(data.get("amount")),
+        leverage: Number(data.get("leverage")),
+        transaction: data.get("transaction") === "true",
+        execute: data.get("transaction") === "true",
+        use_llm_decision: data.get("useLlmDecision") === "true"
+      };
+    }
+
+    function formatNumber(value, digits = 4) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+      return Number(value).toLocaleString(undefined, { maximumFractionDigits: digits });
+    }
+
+    function render(result, options = { refresh: true }) {
+      lastAnalysisPayload = result.analysis_payload || result;
+      const analysis = result.analysis || result.result?.analysis || {};
+      const action = analysis.action || "hold";
+      const actionEl = document.getElementById("action");
+      actionEl.textContent = action.toUpperCase();
+      actionEl.className = "metric " + action;
+      document.getElementById("confidence").textContent = Math.round((analysis.confidence || 0) * 100) + "%";
+      document.getElementById("bias").textContent = analysis.bias || "-";
+      document.getElementById("setup").textContent = analysis.setup || "-";
+      document.getElementById("entry").textContent = formatNumber(analysis.entry);
+      document.getElementById("stop").textContent = formatNumber(analysis.stop_loss);
+      document.getElementById("tp1").textContent = formatNumber(analysis.take_profit_1);
+      document.getElementById("tp2").textContent = formatNumber(analysis.take_profit_2);
+      const reasons = document.getElementById("reasons");
+      reasons.innerHTML = "";
+      (analysis.reasons || ["无理由。"]).forEach((reason) => {
+        const li = document.createElement("li");
+        li.textContent = reason;
+        reasons.appendChild(li);
+      });
+      if (result.account) renderBalance(result.account);
+      const llmDecision = result.llm_decision || result.result?.llm_decision;
+      if (llmDecision) renderLLMDecision(llmDecision);
+      document.getElementById("raw").textContent = JSON.stringify(result, null, 2);
+      if (options.refresh) {
+        loadPerformance();
+        loadTaskCenter();
+      }
+    }
+
+    function renderLLMDecision(payload) {
+      const decision = payload.decision || payload.llm_decision?.decision || payload;
+      document.getElementById("llmHint").textContent = `${payload.provider || "-"} / ${payload.model || "-"} / ${payload.eligible ? "策略满足" : "策略未满足"}`;
+      document.getElementById("llmApproved").textContent = decision.approved ? "YES" : "NO";
+      document.getElementById("llmApproved").className = decision.approved ? "positive" : "negative";
+      document.getElementById("llmAction").textContent = (decision.action || "-").toUpperCase();
+      document.getElementById("llmRisk").textContent = decision.risk_level || "-";
+      document.getElementById("llmLeverage").textContent = `${decision.recommended_leverage || 1}x`;
+      document.getElementById("llmEntry").textContent = formatNumber(decision.entry);
+      document.getElementById("llmStop").textContent = formatNumber(decision.stop_loss);
+      document.getElementById("llmTp1").textContent = formatNumber(decision.take_profit_1);
+      document.getElementById("llmTp2").textContent = formatNumber(decision.take_profit_2);
+      document.getElementById("llmTrader").textContent = decision.trader_rationale || "-";
+      document.getElementById("llmPortfolio").textContent = decision.portfolio_rationale || "-";
+      const warnings = document.getElementById("llmWarnings");
+      warnings.innerHTML = "";
+      (decision.warnings || ["暂无风控提示。"]).forEach((warning) => {
+        const li = document.createElement("li");
+        li.textContent = warning;
+        warnings.appendChild(li);
+      });
+    }
+
+    function renderBalance(balance) {
+      const hint = document.getElementById("balanceHint");
+      hint.textContent = `${balance.exchange || "-"} / ${balance.paper ? "paper" : "live"} / ${balance.validated ? "已校验" : "模拟账户"}`;
+      const body = document.getElementById("balanceBody");
+      body.innerHTML = "";
+      const assets = balance.assets || [];
+      if (!assets.length) {
+        body.innerHTML = '<tr><td colspan="4" class="muted">没有可显示的资金资产。</td></tr>';
+        return;
+      }
+      assets.forEach((asset) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${asset.asset || "-"}</td>
+          <td>${formatNumber(asset.free, 8)}</td>
+          <td>${formatNumber(asset.used, 8)}</td>
+          <td>${formatNumber(asset.total, 8)}</td>
+        `;
+        body.appendChild(tr);
+      });
+    }
+
+    function renderPerformance(performance) {
+      document.getElementById("totalOrders").textContent = performance.total_orders ?? 0;
+      document.getElementById("notional").textContent = formatNumber(performance.notional, 2);
+      document.getElementById("marginUsed").textContent = formatNumber(performance.margin_used, 2);
+      const pnl = Number(performance.unrealized_pnl || 0);
+      const pnlEl = document.getElementById("unrealizedPnl");
+      pnlEl.textContent = formatNumber(pnl, 4);
+      pnlEl.className = "metric " + (pnl >= 0 ? "positive" : "negative");
+      document.getElementById("unrealizedRoe").textContent = "ROE " + formatNumber((performance.unrealized_roe || 0) * 100, 2) + "%";
+
+      const rows = performance.records || [];
+      const body = document.getElementById("ordersBody");
+      body.innerHTML = "";
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="11" class="muted">暂无订单。</td></tr>';
+        return;
+      }
+      rows.forEach((row) => {
+        const pnlValue = Number(row.pnl || 0);
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${row.created_at || "-"}</td>
+          <td>${row.exchange || "-"}</td>
+          <td>${row.symbol || "-"}</td>
+          <td class="${row.side || ""}">${(row.side || "-").toUpperCase()}</td>
+          <td>${formatNumber(row.raw_order?.info?.margin_usdt ?? row.margin, 4)} USDT</td>
+          <td>${row.leverage || 1}x</td>
+          <td>${formatNumber(row.entry_price)}</td>
+          <td>${formatNumber(row.mark_price)}</td>
+          <td class="${pnlValue >= 0 ? "positive" : "negative"}">${formatNumber(pnlValue, 4)}</td>
+          <td>${formatNumber((row.roe || 0) * 100, 2)}%</td>
+          <td>${row.paper ? "paper" : "live"}</td>
+        `;
+        body.appendChild(tr);
+      });
+    }
+
+    function renderTaskCenter(payload) {
+      const tasksBody = document.getElementById("tasksBody");
+      tasksBody.innerHTML = "";
+      const tasks = payload.tasks || [];
+      if (!tasks.length) {
+        tasksBody.innerHTML = '<tr><td colspan="13" class="muted">暂无任务。</td></tr>';
+      } else {
+        tasks.forEach((task) => {
+          const shortId = task.id ? task.id.slice(0, 8) : "-";
+          const status = String(task.status || "").toUpperCase();
+          const canCancel = ["PENDING", "ORDERED"].includes(status);
+          const canReview = !["CANCELED", "FAILED"].includes(status);
+          const canDelete = ["COMPLETED", "CANCELED", "FAILED"].includes(status);
+          const reviewLabel = task.result?.llm_decision ? "重跑LLM" : "LLM决策";
+          const reviewText = canReview
+            ? `<button class="secondary compact" type="button" data-llm-task="${task.id}">${reviewLabel}</button>`
+            : "-";
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td title="${task.id || ""}">${shortId}</td>
+            <td class="${String(task.status || "").toLowerCase()}">${task.status || "-"}</td>
+            <td>${task.exchange || "-"}</td>
+            <td>${task.symbol || "-"}</td>
+            <td>${task.timeframe || "-"}</td>
+            <td>${task.execute ? "下单" : "分析"}</td>
+            <td>${task.leverage || 1}x</td>
+            <td>${task.updated_at || "-"}</td>
+            <td>${task.error || "-"}</td>
+            <td>${task.use_llm_decision ? "启用" : "禁用"}</td>
+            <td>${reviewText}</td>
+            <td>${canCancel ? `<button class="danger compact" type="button" data-cancel-task="${task.id}">取消</button>` : "-"}</td>
+            <td>${canDelete ? `<button class="ghost compact" type="button" data-delete-task="${task.id}">删除</button>` : "-"}</td>
+          `;
+          tasksBody.appendChild(tr);
+        });
+      }
+
+      const logsBody = document.getElementById("logsBody");
+      logsBody.innerHTML = "";
+      const logs = payload.logs || [];
+      if (!logs.length) {
+        logsBody.innerHTML = '<tr><td colspan="4" class="muted">暂无日志。</td></tr>';
+      } else {
+        logs.forEach((log) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${log.created_at || "-"}</td>
+            <td title="${log.task_id || ""}">${log.task_id ? log.task_id.slice(0, 8) : "-"}</td>
+            <td class="${log.level || ""}">${log.level || "-"}</td>
+            <td>${log.message || "-"}</td>
+          `;
+          logsBody.appendChild(tr);
+        });
+      }
+
+      const watchBody = document.getElementById("watchBody");
+      watchBody.innerHTML = "";
+      const watched = payload.watched_orders || [];
+      if (!watched.length) {
+        watchBody.innerHTML = '<tr><td colspan="10" class="muted">暂无监听订单。</td></tr>';
+      } else {
+        watched.forEach((row) => {
+          const pnlValue = Number(row.pnl || 0);
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td title="${row.id || ""}">${row.id ? row.id.slice(0, 8) : "-"}</td>
+            <td>${row.exchange || "-"}</td>
+            <td>${row.symbol || "-"}</td>
+            <td class="${row.side || ""}">${(row.side || "-").toUpperCase()}</td>
+            <td>${row.status || "-"}</td>
+            <td>${formatNumber(row.entry_price)}</td>
+            <td>${formatNumber(row.mark_price)}</td>
+            <td class="${pnlValue >= 0 ? "positive" : "negative"}">${formatNumber(pnlValue, 4)}</td>
+            <td>${formatNumber((row.roe || 0) * 100, 2)}%</td>
+            <td class="${row.watch_status || ""}">${row.watch_status || "-"}</td>
+          `;
+          watchBody.appendChild(tr);
+        });
+      }
+    }
+
+    async function postJson(url, body) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    async function postEmpty(url) {
+      const res = await fetch(url, { method: "POST" });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    async function getJson(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    async function loadBalance() {
+      balanceBtn.disabled = true;
+      try {
+        const result = await getJson(`/api/account/balance?exchange=${encodeURIComponent(payload().exchange)}`);
+        renderBalance(result);
+        document.getElementById("raw").textContent = JSON.stringify(result, null, 2);
+      } catch (error) {
+        document.getElementById("raw").textContent = String(error);
+      } finally {
+        balanceBtn.disabled = false;
+      }
+    }
+
+    async function loadPerformance() {
+      try {
+        const result = await getJson("/api/performance");
+        document.getElementById("historyHint").textContent = "显示全部记录";
+        renderPerformance(result);
+      } catch (error) {
+        document.getElementById("raw").textContent = String(error);
+      }
+    }
+
+    async function loadTaskCenter() {
+      try {
+        taskCenterState = await getJson("/api/tasks");
+        renderTaskCenter(taskCenterState);
+      } catch (error) {
+        document.getElementById("raw").textContent = String(error);
+      }
+    }
+
+    function updateTaskFromSocket(payload) {
+      const taskId = payload.task_id || payload.id;
+      if (!taskId) return;
+      const result = payload.result || {};
+      const taskPatch = {
+        ...payload,
+        id: taskId,
+        status: payload.status,
+        progress: payload.progress,
+        updated_at: payload.updated_at || payload.timestamp,
+        result: result,
+        error: payload.error,
+      };
+      if (result.exchange) taskPatch.exchange = result.exchange;
+      if (result.symbol) taskPatch.symbol = result.symbol;
+      if (result.timeframe) taskPatch.timeframe = result.timeframe;
+      const existingIndex = (taskCenterState.tasks || []).findIndex((task) => task.id === taskId);
+      if (existingIndex >= 0) {
+        taskCenterState.tasks[existingIndex] = {
+          ...taskCenterState.tasks[existingIndex],
+          ...Object.fromEntries(Object.entries(taskPatch).filter(([, value]) => value !== undefined)),
+        };
+      } else {
+        taskCenterState.tasks = [
+          Object.fromEntries(Object.entries(taskPatch).filter(([, value]) => value !== undefined)),
+          ...(taskCenterState.tasks || []),
+        ];
+      }
+      if (payload.log) {
+        taskCenterState.logs = [
+          payload.log,
+          ...(taskCenterState.logs || []).filter((log) => (
+            log.created_at !== payload.log.created_at || log.message !== payload.log.message
+          )),
+        ].slice(0, 200);
+      }
+      renderTaskCenter(taskCenterState);
+    }
+
+    function connectTaskSocket(taskId) {
+      if (taskSocket) taskSocket.close();
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      taskSocket = new WebSocket(`${protocol}//${window.location.host}/ws/${encodeURIComponent(taskId)}`);
+      taskSocket.onmessage = (event) => {
+        const payload = JSON.parse(event.data);
+        document.getElementById("raw").textContent = JSON.stringify(payload, null, 2);
+        const status = String(payload.status || "").toUpperCase();
+        updateTaskFromSocket(payload);
+        if (status === "COMPLETED" && payload.result) {
+          render(payload.result, { refresh: false });
+          loadPerformance();
+        }
+      };
+      taskSocket.onerror = () => {};
+      taskSocket.onclose = () => {
+        taskSocket = null;
+      };
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = form.querySelector("button[type=submit]");
+      button.disabled = true;
+      try {
+        render(await postJson("/api/bot/run", payload()));
+      } catch (error) {
+        document.getElementById("raw").textContent = String(error);
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    asyncBtn.addEventListener("click", async () => {
+      asyncBtn.disabled = true;
+      try {
+        const queued = await postJson("/api/tasks", payload());
+        document.getElementById("raw").textContent = JSON.stringify(queued, null, 2);
+        connectTaskSocket(queued.task_id);
+        await loadTaskCenter();
+      } catch (error) {
+        document.getElementById("raw").textContent = String(error);
+      } finally {
+        asyncBtn.disabled = false;
+      }
+    });
+
+    llmBtn.addEventListener("click", async () => {
+      llmBtn.disabled = true;
+      try {
+        const result = await postJson("/api/llm/decision", payload());
+        renderLLMDecision(result.llm_decision);
+        document.getElementById("raw").textContent = JSON.stringify(result, null, 2);
+      } catch (error) {
+        document.getElementById("raw").textContent = String(error);
+      } finally {
+        llmBtn.disabled = false;
+      }
+    });
+
+    balanceBtn.addEventListener("click", loadBalance);
+    refreshBtn.addEventListener("click", () => {
+      loadPerformance();
+      loadTaskCenter();
+      loadBalance();
+    });
+    taskCenterBtn.addEventListener("click", loadTaskCenter);
+    taskCenterSideBtn.addEventListener("click", loadTaskCenter);
+    document.getElementById("tasksBody").addEventListener("click", async (event) => {
+      const llmTaskButton = event.target.closest("[data-llm-task]");
+      if (llmTaskButton) {
+        llmTaskButton.disabled = true;
+        const taskId = llmTaskButton.getAttribute("data-llm-task");
+        try {
+          const result = await postEmpty(`/api/tasks/${encodeURIComponent(taskId)}/llm-decision`);
+          renderLLMDecision(result.llm_decision);
+          document.getElementById("raw").textContent = JSON.stringify(result, null, 2);
+          await loadTaskCenter();
+        } catch (error) {
+          document.getElementById("raw").textContent = String(error);
+        } finally {
+          llmTaskButton.disabled = false;
+        }
+        return;
+      }
+      const button = event.target.closest("[data-cancel-task]");
+      if (button) {
+        button.disabled = true;
+        const taskId = button.getAttribute("data-cancel-task");
+        try {
+          const result = await postEmpty(`/api/tasks/${encodeURIComponent(taskId)}/cancel`);
+          document.getElementById("raw").textContent = JSON.stringify(result, null, 2);
+          await loadTaskCenter();
+        } catch (error) {
+          document.getElementById("raw").textContent = String(error);
+        } finally {
+          button.disabled = false;
+        }
+        return;
+      }
+      const deleteButton = event.target.closest("[data-delete-task]");
+      if (!deleteButton) return;
+      deleteButton.disabled = true;
+      const taskId = deleteButton.getAttribute("data-delete-task");
+      try {
+        const result = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+        if (!result.ok) throw new Error(await result.text());
+        const payload = await result.json();
+        document.getElementById("raw").textContent = JSON.stringify(payload, null, 2);
+        await loadTaskCenter();
+      } catch (error) {
+        document.getElementById("raw").textContent = String(error);
+      } finally {
+        deleteButton.disabled = false;
+      }
+    });
+
+    fetch("/api/health").then(r => r.json()).then((health) => {
+      document.getElementById("healthText").textContent = health.paper_trading ? "paper mode" : "live mode";
+      document.getElementById("healthDot").style.background = health.paper_trading ? "#b54708" : "#087443";
+    }).catch(() => {
+      document.getElementById("healthText").textContent = "offline";
+      document.getElementById("healthDot").style.background = "#b42318";
+    });
+    loadPerformance();
+    loadTaskCenter();
+  </script>
+</body>
+</html>

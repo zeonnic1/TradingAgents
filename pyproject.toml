@@ -11,6 +11,9 @@ requires-python = ">=3.10"
 dependencies = [
     "langchain-core>=0.3.81",
     "backtrader>=1.9.78.123",
+    "celery>=5.5.0",
+    "ccxt>=4.4.0",
+    "fastapi>=0.115.0",
     "langchain-anthropic>=0.3.15",
     "langchain-experimental>=0.3.4",
     "langchain-google-genai>=4.0.0",
@@ -19,14 +22,17 @@ dependencies = [
     "langgraph-checkpoint-sqlite>=2.0.0",
     "pandas>=2.3.0",
     "parsel>=1.10.0",
+    "pymysql>=1.1.1",
     "pytz>=2025.2",
     "questionary>=2.1.0",
     "redis>=6.2.0",
     "requests>=2.32.4",
     "rich>=14.0.0",
     "typer>=0.21.0",
+    "uvicorn[standard]>=0.34.0",
     "setuptools>=80.9.0",
     "stockstats>=0.6.5",
+    "sqlalchemy>=2.0.36",
     "tqdm>=4.67.1",
     "typing-extensions>=4.14.0",
     "yfinance>=0.2.63",
@@ -34,12 +40,14 @@ dependencies = [
 
 [project.scripts]
 tradingagents = "cli.main:app"
+tradingagents-crypto-api = "tradingagents.crypto.server:main"
 
 [tool.setuptools.packages.find]
 include = ["tradingagents*", "cli*"]
 
 [tool.setuptools.package-data]
 cli = ["static/*"]
+tradingagents = ["crypto/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

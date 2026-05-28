@@ -225,6 +225,65 @@ print(decision)
 
 See `tradingagents/default_config.py` for all configuration options.
 
+## Crypto Trading Hub
+
+This repository also includes a crypto-only trading platform layer inspired by the local Trading Hub notes. It provides:
+
+- Binance, OKX, and Bybit exchange adapters through a unified interface
+- a deterministic Trading Hub signal engine focused on liquidity sweeps, LTF CHOCH, Vegas channel, EMA50, and POI-style levels
+- FastAPI backend with a static dashboard
+- Celery async execution for bot runs
+- WebSocket completion notifications through Redis task channels
+- order history and unrealized performance tracking
+- futures leverage on order requests
+- exchange account balance panel and API-key validation before live orders
+- MySQL-backed async task center logs and task cancellation
+- manual LLM Trader / Portfolio review that receives the rule-engine JSON payload before execution
+- paper trading by default; live orders require `CRYPTO_TRADING_LIVE_ENABLED=true`
+
+Run the API locally:
+
+```bash
+pip install .
+tradingagents-crypto-api
+```
+
+Then open `http://127.0.0.1:8000`.
+
+Run the async worker separately when using `/api/bot/run-async`:
+
+```bash
+celery -A tradingagents.crypto.tasks.celery_app worker --loglevel=INFO --pool=solo
+```
+
+Docker Compose separates public middleware from business services:
+
+```bash
+docker compose -f docker-compose-public.yaml up -d
+docker compose up crypto-api crypto-worker
+```
+
+Live mode environment variables:
+
+```bash
+CRYPTO_TRADING_LIVE_ENABLED=true
+BINANCE_API_KEY=...
+BINANCE_API_SECRET=...
+OKX_API_KEY=...
+OKX_API_SECRET=...
+OKX_API_PASSWORD=...
+BYBIT_API_KEY=...
+BYBIT_API_SECRET=...
+```
+
+Keep paper mode on until exchange permissions, position sizing, stop logic, and operational monitoring are reviewed.
+
+Order history and performance records are stored in MySQL. Configure the connection with `CRYPTO_DATABASE_URL`, for example:
+
+```bash
+CRYPTO_DATABASE_URL=mysql+pymysql://tradingagents:tradingagents@localhost:3306/tradingagents_crypto
+```
+
 ## Persistence and Recovery
 
 TradingAgents persists two kinds of state across runs.

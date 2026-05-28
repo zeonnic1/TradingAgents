@@ -2,34 +2,53 @@ services:
   tradingagents:
     build: .
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - tradingagents_data:/home/appuser/.tradingagents
+    networks:
+      - tradingagents-public
     tty: true
     stdin_open: true
 
-  ollama:
-    image: ollama/ollama:latest
-    volumes:
-      - ollama_data:/root/.ollama
-    profiles:
-      - ollama
-
-  tradingagents-ollama:
+  crypto-api:
     build: .
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
-      - LLM_PROVIDER=ollama
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CRYPTO_DATABASE_URL=mysql+pymysql://tradingagents:tradingagents@mysql:3306/tradingagents_crypto
+      - CRYPTO_API_HOST=0.0.0.0
+      - CRYPTO_API_PORT=8000
+    entrypoint: ["tradingagents-crypto-api"]
+    ports:
+      - "8000:8000"
     volumes:
       - tradingagents_data:/home/appuser/.tradingagents
-    depends_on:
-      - ollama
-    tty: true
-    stdin_open: true
-    profiles:
-      - ollama
+    networks:
+      - tradingagents-public
+
+  crypto-worker:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CRYPTO_DATABASE_URL=mysql+pymysql://tradingagents:tradingagents@mysql:3306/tradingagents_crypto
+    entrypoint: ["celery"]
+    command: ["-A", "tradingagents.crypto.tasks.celery_app", "worker", "--loglevel=INFO"]
+    volumes:
+      - tradingagents_data:/home/appuser/.tradingagents
+    networks:
+      - tradingagents-public
 
 volumes:
   tradingagents_data:
-  ollama_data:
+
+networks:
+  tradingagents-public:
+    external: true
