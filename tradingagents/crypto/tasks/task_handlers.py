@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any
@@ -13,6 +14,9 @@ from tradingagents.crypto.models import BotRunRequest, OrderRequest, SignalActio
 from tradingagents.crypto.services.service import analyze_market, create_order
 from tradingagents.crypto.tasks.task_fsm import TaskStatus
 from tradingagents.crypto.tasks.task_mixins import RedisPublishMixin, TaskLoggingMixin, TaskStateMixin
+
+
+logger = logging.getLogger(__name__)
 
 
 class BaseTaskHandler(TaskLoggingMixin, TaskStateMixin, RedisPublishMixin, ABC):
@@ -75,6 +79,11 @@ class CryptoBotRunHandler(BaseTaskHandler):
 
             self.log(task_id, "info", "Polling strategy attempt started.", {"attempt": attempt})
             last_payload = analyze_market(request)
+            runtime_log = _build_strategy_runtime_log(request, last_payload)
+            runtime_log_context = _build_strategy_runtime_context(request, last_payload, attempt)
+            logger.info(runtime_log)
+            self.log(task_id, "info", runtime_log, runtime_log_context)
+            self.publish_log(task_id, "info", runtime_log, runtime_log_context)
             last_payload["order"] = None
             last_payload["account"] = None
             last_payload["strategy_poll"] = {
@@ -100,10 +109,23 @@ class CryptoBotRunHandler(BaseTaskHandler):
                 })
                 return last_payload
 
-            order_request = self._order_request_from_decision(request, last_payload, decision_payload)
+            order_request, order_block_reason = self._order_request_from_decision(request, last_payload, decision_payload)
             if order_request is not None:
                 self.set_status(task_id, TaskStatus.PENDING, progress=progress, result=last_payload)
-                self.publish(task_id, TaskStatus.PENDING, ready=False, progress=progress, result=last_payload)
+                self.publish(
+                    task_id,
+                    TaskStatus.PENDING,
+                    ready=False,
+                    progress=progress,
+                    result=last_payload,
+                    log=self.make_log_payload(task_id, "info", "Strategy satisfied; creating order.", {
+                        "attempt": attempt,
+                        "rule_action": last_payload.get("analysis", {}).get("action"),
+                        "transaction": transaction_enabled,
+                        "amount_usdt": request.amount,
+                        "use_llm_decision": request.use_llm_decision,
+                    }),
+                )
                 if self.is_canceled(task_id):
                     self.log(task_id, "warn", "Task canceled before order creation.", {"attempt": attempt})
                     return last_payload
@@ -111,14 +133,24 @@ class CryptoBotRunHandler(BaseTaskHandler):
                 last_payload["order"] = order_response.model_dump(mode="json")
                 last_payload["account"] = order_response.account.model_dump(mode="json") if order_response.account else None
                 self.set_status(task_id, TaskStatus.ORDERED, progress=60, result=last_payload)
-                self.publish(task_id, TaskStatus.ORDERED, ready=False, progress=60, result=last_payload)
-                self.log(task_id, "info", "Order created; task moved to ORDERED.", {
+                order_log_context = {
                     "order_id": order_response.order.get("id"),
                     "side": order_request.side.value,
-                })
+                    "amount_usdt": order_request.amount,
+                    "leverage": order_request.leverage,
+                }
+                self.publish(
+                    task_id,
+                    TaskStatus.ORDERED,
+                    ready=False,
+                    progress=60,
+                    result=last_payload,
+                    log=self.make_log_payload(task_id, "info", "Order created; task moved to ORDERED.", order_log_context),
+                )
+                self.log(task_id, "info", "Order created; task moved to ORDERED.", order_log_context)
                 return self._monitor_order_until_exit(task_id, request, last_payload)
 
-            pending_reason = _pending_reason(last_payload, decision_payload, request.use_llm_decision)
+            pending_reason = order_block_reason or _pending_reason(last_payload, decision_payload, request.use_llm_decision)
             last_payload["strategy_poll"]["reason"] = pending_reason
             log_context = {
                 "attempt": attempt,
@@ -155,25 +187,27 @@ class CryptoBotRunHandler(BaseTaskHandler):
         request: BotRunRequest,
         analysis_payload: dict[str, Any],
         decision_payload: dict[str, Any] | None,
-    ) -> OrderRequest | None:
+    ) -> tuple[OrderRequest | None, str | None]:
         analysis = analysis_payload.get("analysis") or {}
         rule_action = analysis.get("action")
         if rule_action not in {SignalAction.BUY.value, SignalAction.SELL.value}:
-            return None
+            return None, None
 
         if request.use_llm_decision:
             decision = (decision_payload or {}).get("decision") or {}
             approved = bool(decision.get("approved"))
             action = decision.get("action") or rule_action
             if not approved or action not in {SignalAction.BUY.value, SignalAction.SELL.value}:
-                return None
+                return None, f"strategy action is {rule_action}, but LLM did not approve actionable trade"
             leverage = int(decision.get("recommended_leverage") or request.leverage)
         else:
             action = rule_action
             leverage = request.leverage
 
-        if not _transaction_enabled(request) or request.amount <= 0:
-            return None
+        if not _transaction_enabled(request):
+            return None, f"strategy action is {rule_action}, but transaction mode is disabled"
+        if request.amount <= 0:
+            return None, f"strategy action is {rule_action}, but amount_usdt must be greater than 0"
 
         return OrderRequest(
             exchange=request.exchange,
@@ -181,7 +215,7 @@ class CryptoBotRunHandler(BaseTaskHandler):
             side=action,
             amount=request.amount,
             leverage=leverage,
-        )
+        ), None
 
     def _monitor_order_until_exit(
         self,
@@ -232,7 +266,22 @@ class CryptoBotRunHandler(BaseTaskHandler):
                 "attempt": attempt,
             }
             self.set_status(task_id, TaskStatus.ORDERED, progress=progress, result=analysis_payload)
-            self.publish(task_id, TaskStatus.ORDERED, ready=False, progress=progress, result=analysis_payload)
+            watch_log_context = {
+                "order_id": order_id,
+                "mark_price": mark,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "attempt": attempt,
+            }
+            self.log(task_id, "info", "Order monitor tick.", watch_log_context)
+            self.publish(
+                task_id,
+                TaskStatus.ORDERED,
+                ready=False,
+                progress=progress,
+                result=analysis_payload,
+                log=self.make_log_payload(task_id, "info", "Order monitor tick.", watch_log_context),
+            )
 
             if exit_status:
                 if order_id:
@@ -265,6 +314,159 @@ def _first_number(*values) -> float | None:
         if value not in (None, ""):
             return float(value)
     return None
+
+
+def _build_strategy_runtime_log(request: BotRunRequest, analysis_payload: dict[str, Any]) -> str:
+    snapshot = analysis_payload.get("snapshot") or {}
+    analysis = analysis_payload.get("analysis") or {}
+    candles = snapshot.get("candles") or []
+    last_candle = candles[-1] if candles else {}
+    current_price = last_candle.get("close", "-")
+    metadata = analysis.get("metadata") or {}
+    daily_bias = analysis.get("bias") or metadata.get("vegas_bias") or "-"
+    ltf = request.timeframe
+    htf = _resolve_htf(ltf)
+    sweep_label, sweep_price, sweep_time = _resolve_waiting_sweep_point(metadata, candles)
+    bos_description = _resolve_bos_description(metadata, candles)
+    poi_ob = _resolve_poi_ob_range(analysis, metadata)
+    return (
+        f"日线偏见:{daily_bias} 当前价格:{current_price} 当前LTF:{ltf} HTF:{htf} "
+        f"{bos_description} 等待清扫:{sweep_label}:{sweep_price} 时间:{sweep_time} 高POI/OB区间:{poi_ob}"
+    )
+
+
+def _build_strategy_runtime_context(request: BotRunRequest, analysis_payload: dict[str, Any], attempt: int) -> dict[str, Any]:
+    analysis = analysis_payload.get("analysis") or {}
+    metadata = analysis.get("metadata") or {}
+    candles = (analysis_payload.get("snapshot") or {}).get("candles") or []
+    sweep_label, sweep_price, sweep_time = _resolve_waiting_sweep_point(metadata, candles)
+    return {
+        "attempt": attempt,
+        "symbol": request.symbol,
+        "ltf": request.timeframe,
+        "htf": _resolve_htf(request.timeframe),
+        "daily_bias": analysis.get("bias") or metadata.get("vegas_bias"),
+        "bos_direction": metadata.get("bos_direction"),
+        "bos_description": _resolve_bos_description(metadata, candles),
+        "bos_break_price": metadata.get("bos_break_price"),
+        "bos_broken_swing_time": _format_candle_time_by_index(candles, metadata.get("bos_broken_swing_index")),
+        "bos_occurrence_time": _format_candle_time_by_index(candles, metadata.get("bos_break_index")),
+        "waiting_sweep_label": sweep_label,
+        "waiting_sweep_price": sweep_price,
+        "waiting_sweep_time": sweep_time,
+        "dynamic_structure_high": metadata.get("dynamic_structure_high"),
+        "dynamic_structure_low": metadata.get("dynamic_structure_low"),
+        "poi_range": metadata.get("poi_range"),
+        "poi_ob_low": metadata.get("poi_ob_low"),
+        "poi_ob_high": metadata.get("poi_ob_high"),
+        "poi_ob_time": _format_candle_time_by_index(candles, metadata.get("poi_ob_index")),
+        "poi_ob_fvg_low": metadata.get("poi_ob_fvg_low"),
+        "poi_ob_fvg_high": metadata.get("poi_ob_fvg_high"),
+        "poi_ob_fvg_time": _format_candle_time_by_index(candles, metadata.get("poi_ob_fvg_index")),
+    }
+
+
+def _resolve_bos_description(metadata: dict[str, Any], candles: list[dict[str, Any]]) -> str:
+    bos_direction = metadata.get("bos_direction")
+    break_price = _display_value(metadata.get("bos_break_price"))
+    broken_swing_time = _format_candle_time_by_index(candles, metadata.get("bos_broken_swing_index"))
+    occurrence_time = _format_candle_time_by_index(candles, metadata.get("bos_break_index"))
+    if bos_direction == "bearish":
+        lower_low = _display_value(metadata.get("dynamic_structure_low"))
+        lower_low_time = _format_candle_time_by_index(candles, metadata.get("dynamic_structure_low_index"))
+        return (
+            f"被跌破低点为{break_price} 时间:{broken_swing_time},"
+            f"BOS发生时间:{occurrence_time},更低的低点为{lower_low} 时间:{lower_low_time}"
+        )
+    if bos_direction == "bullish":
+        higher_high = _display_value(metadata.get("dynamic_structure_high"))
+        higher_high_time = _format_candle_time_by_index(candles, metadata.get("dynamic_structure_high_index"))
+        return (
+            f"被突破高点为{break_price} 时间:{broken_swing_time},"
+            f"BOS发生时间:{occurrence_time},更高的高点为{higher_high} 时间:{higher_high_time}"
+        )
+    return "BOS:-"
+
+
+def _display_value(value: Any) -> Any:
+    if value is None:
+        return "-"
+    return value
+
+
+def _resolve_waiting_sweep_point(metadata: dict[str, Any], candles: list[dict[str, Any]] | None = None) -> tuple[str, Any, str]:
+    candles = candles or []
+    bos_direction = metadata.get("bos_direction")
+    if bos_direction == "bearish":
+        return (
+            "dynamic_structure_high",
+            metadata.get("dynamic_structure_high", "-"),
+            _format_candle_time_by_index(candles, metadata.get("dynamic_structure_high_index")),
+        )
+    if bos_direction == "bullish":
+        return (
+            "dynamic_structure_low",
+            metadata.get("dynamic_structure_low", "-"),
+            _format_candle_time_by_index(candles, metadata.get("dynamic_structure_low_index")),
+        )
+    return "dynamic_structure", "-", "-"
+
+
+def _format_candle_time_by_index(candles: list[dict[str, Any]], index: Any) -> str:
+    try:
+        candle = candles[int(index)]
+    except (TypeError, ValueError, IndexError):
+        return "-"
+    if not isinstance(candle, dict):
+        return "-"
+    return _format_timestamp(candle.get("timestamp"))
+
+
+def _format_timestamp(timestamp: Any) -> str:
+    try:
+        value = int(timestamp)
+    except (TypeError, ValueError):
+        return "-"
+    if value <= 0:
+        return "-"
+    seconds = value / 1000 if value > 10_000_000_000 else value
+    return datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _resolve_htf(timeframe: str) -> str:
+    mapping = {
+        "1m": "15m",
+        "3m": "15m",
+        "5m": "1h",
+        "15m": "4h",
+        "30m": "4h",
+        "1h": "1d",
+        "2h": "1d",
+        "4h": "1d",
+        "1d": "1w",
+    }
+    return mapping.get(str(timeframe).lower(), "1d")
+
+
+def _resolve_poi_ob_range(analysis: dict[str, Any], metadata: dict[str, Any]) -> str:
+    poi_low = metadata.get("poi_ob_low")
+    poi_high = metadata.get("poi_ob_high")
+    if poi_low is not None and poi_high is not None:
+        fvg_low = metadata.get("poi_ob_fvg_low")
+        fvg_high = metadata.get("poi_ob_fvg_high")
+        fvg = f" FVG:{fvg_low}-{fvg_high}" if fvg_low is not None and fvg_high is not None else ""
+        return f"{poi_low}-{poi_high}{fvg}"
+    entry = analysis.get("entry")
+    stop = analysis.get("stop_loss")
+    if entry is not None and stop is not None:
+        low = min(float(entry), float(stop))
+        high = max(float(entry), float(stop))
+        return f"{low}-{high}"
+    range_low = metadata.get("range_low")
+    range_high = metadata.get("range_high")
+    if range_low is not None and range_high is not None:
+        return f"{range_low}-{range_high}"
+    return "-"
 
 
 def _pending_reason(analysis_payload: dict[str, Any], decision_payload: dict[str, Any] | None, use_llm_decision: bool) -> str:

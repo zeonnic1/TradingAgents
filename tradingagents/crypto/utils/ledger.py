@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, delete, inspect, select, text
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, inspect, select, text
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from tradingagents.crypto.managers.db_manager import get_engine, get_session_factory, reset_db_manager_for_tests
 from tradingagents.crypto.models import (
@@ -62,22 +62,33 @@ class TaskRow(Base):
     result_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     llm_logs: Mapped[Optional[list]] = mapped_column(JSON, nullable=True, default=list)
     error: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+    logs: Mapped[list["TaskLogRow"]] = relationship(
+        back_populates="task",
+        cascade="all, delete-orphan",
+    )
 
 
 class TaskLogRow(Base):
     __tablename__ = "crypto_task_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    task_id: Mapped[str] = mapped_column(String(96), index=True, nullable=False)
+    task_id: Mapped[str] = mapped_column(
+        String(96),
+        ForeignKey("crypto_tasks.task_id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
     level: Mapped[str] = mapped_column(String(16), nullable=False, default="info")
     message: Mapped[str] = mapped_column(String(1024), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     context: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    task: Mapped[TaskRow] = relationship(back_populates="logs")
 
 
 def init_db() -> None:
     Base.metadata.create_all(get_engine())
     _ensure_task_columns()
+    _ensure_task_log_foreign_key()
 
 
 def record_order(request: OrderRequest, response: OrderResponse) -> OrderRecord:
@@ -250,17 +261,19 @@ def append_task_log(
     level: str,
     message: str,
     context: Optional[dict] = None,
-) -> TaskLogRecord:
+) -> Optional[TaskLogRecord]:
     init_db()
     now = datetime.now(timezone.utc)
-    row = TaskLogRow(
-        task_id=task_id,
-        level=level,
-        message=message,
-        created_at=now,
-        context=context or {},
-    )
     with get_session_factory()() as session:
+        if session.get(TaskRow, task_id) is None:
+            return None
+        row = TaskLogRow(
+            task_id=task_id,
+            level=level,
+            message=message,
+            created_at=now,
+            context=context or {},
+        )
         session.add(row)
         session.commit()
         session.refresh(row)
@@ -290,7 +303,6 @@ def delete_task_record(task_id: str) -> bool:
         row = session.get(TaskRow, task_id)
         if row is None:
             return False
-        session.execute(delete(TaskLogRow).where(TaskLogRow.task_id == task_id))
         session.delete(row)
         session.commit()
         return True
@@ -411,6 +423,46 @@ def _ensure_task_columns() -> None:
     with engine.begin() as conn:
         for statement in statements:
             conn.execute(text(statement))
+
+
+def _ensure_task_log_foreign_key() -> None:
+    """为旧表补齐任务日志外键。
+
+    新表由 SQLAlchemy metadata 创建时已经有 ForeignKey。旧表不会被 create_all
+    自动修改，所以这里补充 task_id -> crypto_tasks.task_id 的 ON DELETE CASCADE。
+    """
+    engine = get_engine()
+    inspector = inspect(engine)
+    if not inspector.has_table("crypto_tasks") or not inspector.has_table("crypto_task_logs"):
+        return
+    with engine.begin() as conn:
+        existing = conn.execute(text(
+            """
+            SELECT CONSTRAINT_NAME
+            FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'crypto_task_logs'
+              AND COLUMN_NAME = 'task_id'
+              AND REFERENCED_TABLE_NAME = 'crypto_tasks'
+            """
+        )).first()
+        if existing:
+            return
+        conn.execute(text(
+            """
+            DELETE l FROM crypto_task_logs l
+            LEFT JOIN crypto_tasks t ON l.task_id = t.task_id
+            WHERE t.task_id IS NULL
+            """
+        ))
+        conn.execute(text(
+            """
+            ALTER TABLE crypto_task_logs
+            ADD CONSTRAINT fk_crypto_task_logs_task_id
+            FOREIGN KEY (task_id) REFERENCES crypto_tasks(task_id)
+            ON DELETE CASCADE
+            """
+        ))
 
 
 def _row_to_task_log(row: TaskLogRow) -> TaskLogRecord:

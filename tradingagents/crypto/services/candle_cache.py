@@ -15,7 +15,14 @@ class CandleStore(Protocol):
     def count(self, exchange: ExchangeName, symbol: str, timeframe: str) -> int:
         ...
 
-    def save_many(self, exchange: ExchangeName, symbol: str, timeframe: str, candles: List[Candle]) -> int:
+    def save_many(
+        self,
+        exchange: ExchangeName,
+        symbol: str,
+        timeframe: str,
+        candles: List[Candle],
+        update_existing: bool = False,
+    ) -> int:
         ...
 
     def list_recent(self, exchange: ExchangeName, symbol: str, timeframe: str, limit: int) -> List[Candle]:
@@ -40,7 +47,14 @@ class RedisCandleStore:
     def count(self, exchange: ExchangeName, symbol: str, timeframe: str) -> int:
         return int(self._client().zcard(candle_cache_key(exchange, symbol, timeframe)) or 0)
 
-    def save_many(self, exchange: ExchangeName, symbol: str, timeframe: str, candles: List[Candle]) -> int:
+    def save_many(
+        self,
+        exchange: ExchangeName,
+        symbol: str,
+        timeframe: str,
+        candles: List[Candle],
+        update_existing: bool = False,
+    ) -> int:
         if not candles:
             return 0
         client = self._client()
@@ -48,7 +62,10 @@ class RedisCandleStore:
         saved = 0
         for candle in candles:
             if client.zcount(key, candle.timestamp, candle.timestamp):
-                continue
+                if update_existing:
+                    client.zremrangebyscore(key, candle.timestamp, candle.timestamp)
+                else:
+                    continue
             client.zadd(key, {json.dumps(candle.model_dump(mode="json"), ensure_ascii=False): candle.timestamp})
             saved += 1
         return saved
@@ -92,7 +109,7 @@ class CandleCache:
             self._initialized_keys.add(key)
 
         latest_candles = client.fetch_ohlcv(request.symbol, request.timeframe, 1)
-        self.store.save_many(request.exchange, request.symbol, request.timeframe, latest_candles)
+        self.store.save_many(request.exchange, request.symbol, request.timeframe, latest_candles, update_existing=True)
 
         return MarketSnapshot(
             exchange=request.exchange,

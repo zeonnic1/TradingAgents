@@ -65,3 +65,22 @@ class RedisPublishMixin:
                 **payload,
             },
         )
+
+    def make_log_payload(self, task_id: str, level: str, message: str, context: dict | None = None) -> dict:
+        return {
+            "task_id": task_id,
+            "level": level,
+            "message": message,
+            "context": context or {},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def publish_log(self, task_id: str, level: str, message: str, context: dict | None = None) -> None:
+        publish_task_status(
+            task_id,
+            {
+                "task_id": task_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "log": self.make_log_payload(task_id, level, message, context),
+            },
+        )

@@ -174,6 +174,26 @@
     }
     th { color: #475467; font-weight: 750; background: #f8fafc; }
     .table-wrap { overflow: auto; }
+    .task-detail-row td {
+      background: #f8fafc;
+      white-space: normal;
+    }
+    .task-detail {
+      display: grid;
+      gap: 10px;
+    }
+    .task-detail-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: #344054;
+      font-weight: 700;
+    }
+    .task-detail table td,
+    .task-detail table th {
+      white-space: normal;
+    }
     .buy, .positive, .profit, .completed, .info { color: var(--ok); }
     .sell, .negative, .failed, .drawdown, .error { color: var(--danger); }
     .hold, .queued, .pending, .ordered, .running, .watching, .warn, .canceled { color: var(--warn); }
@@ -357,35 +377,14 @@
                 <th>更新时间</th>
                 <th>错误</th>
                 <th>LLM开关</th>
+                <th>详情</th>
                 <th>LLM</th>
                 <th>操作</th>
                 <th>删除</th>
               </tr>
             </thead>
             <tbody id="tasksBody">
-              <tr><td colspan="13" class="muted">暂无任务。</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <h2>异步任务日志</h2>
-          <span class="muted">展示最近日志</span>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>时间</th>
-                <th>任务ID</th>
-                <th>级别</th>
-                <th>消息</th>
-              </tr>
-            </thead>
-            <tbody id="logsBody">
-              <tr><td colspan="4" class="muted">暂无日志。</td></tr>
+              <tr><td colspan="14" class="muted">暂无任务。</td></tr>
             </tbody>
           </table>
         </div>
@@ -489,6 +488,7 @@
     let taskSocket = null;
     let lastAnalysisPayload = null;
     let taskCenterState = { tasks: [], logs: [], watched_orders: [] };
+    let selectedTaskId = null;
 
     function payload() {
       const data = new FormData(form);
@@ -627,8 +627,11 @@
       const tasksBody = document.getElementById("tasksBody");
       tasksBody.innerHTML = "";
       const tasks = payload.tasks || [];
+      if (selectedTaskId && !tasks.some((task) => task.id === selectedTaskId)) {
+        selectedTaskId = null;
+      }
       if (!tasks.length) {
-        tasksBody.innerHTML = '<tr><td colspan="13" class="muted">暂无任务。</td></tr>';
+        tasksBody.innerHTML = '<tr><td colspan="14" class="muted">暂无任务。</td></tr>';
       } else {
         tasks.forEach((task) => {
           const shortId = task.id ? task.id.slice(0, 8) : "-";
@@ -652,32 +655,65 @@
             <td>${task.updated_at || "-"}</td>
             <td>${task.error || "-"}</td>
             <td>${task.use_llm_decision ? "启用" : "禁用"}</td>
+            <td><button class="secondary compact" type="button" data-view-task="${task.id}">${task.id === selectedTaskId ? "查看中" : "详情"}</button></td>
             <td>${reviewText}</td>
             <td>${canCancel ? `<button class="danger compact" type="button" data-cancel-task="${task.id}">取消</button>` : "-"}</td>
             <td>${canDelete ? `<button class="ghost compact" type="button" data-delete-task="${task.id}">删除</button>` : "-"}</td>
           `;
           tasksBody.appendChild(tr);
+          if (task.id === selectedTaskId) {
+            const detailRow = document.createElement("tr");
+            detailRow.className = "task-detail-row";
+            detailRow.innerHTML = `<td colspan="14">${renderTaskDetail(payload, task)}</td>`;
+            tasksBody.appendChild(detailRow);
+          }
         });
       }
 
-      const logsBody = document.getElementById("logsBody");
-      logsBody.innerHTML = "";
-      const logs = payload.logs || [];
+      renderWatchedOrders(payload);
+    }
+
+    function renderTaskDetail(payload, task) {
+      const logs = (payload.logs || []).filter((log) => log.task_id === task.id);
+      const rows = [];
       if (!logs.length) {
-        logsBody.innerHTML = '<tr><td colspan="4" class="muted">暂无日志。</td></tr>';
+        rows.push('<tr><td colspan="4" class="muted">当前任务暂无日志。</td></tr>');
       } else {
         logs.forEach((log) => {
-          const tr = document.createElement("tr");
-          tr.innerHTML = `
+          rows.push(`
+            <tr>
             <td>${log.created_at || "-"}</td>
             <td title="${log.task_id || ""}">${log.task_id ? log.task_id.slice(0, 8) : "-"}</td>
             <td class="${log.level || ""}">${log.level || "-"}</td>
             <td>${log.message || "-"}</td>
-          `;
-          logsBody.appendChild(tr);
+            </tr>
+          `);
         });
       }
+      return `
+        <div class="task-detail">
+          <div class="task-detail-title">
+            <span>任务日志 ${task.id ? task.id.slice(0, 8) : "-"}</span>
+            <span class="muted">${task.status || "-"} / ${task.symbol || "-"} / ${task.timeframe || "-"}</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>任务ID</th>
+                  <th>级别</th>
+                  <th>消息</th>
+                </tr>
+              </thead>
+              <tbody>${rows.join("")}</tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
 
+    function renderWatchedOrders(payload) {
       const watchBody = document.getElementById("watchBody");
       watchBody.innerHTML = "";
       const watched = payload.watched_orders || [];
@@ -761,6 +797,13 @@
     function updateTaskFromSocket(payload) {
       const taskId = payload.task_id || payload.id;
       if (!taskId) return;
+      if (String(payload.status || "").toUpperCase() === "DELETED") {
+        taskCenterState.tasks = (taskCenterState.tasks || []).filter((task) => task.id !== taskId);
+        taskCenterState.logs = (taskCenterState.logs || []).filter((log) => log.task_id !== taskId);
+        if (selectedTaskId === taskId) selectedTaskId = null;
+        renderTaskCenter(taskCenterState);
+        return;
+      }
       const result = payload.result || {};
       const taskPatch = {
         ...payload,
@@ -866,6 +909,13 @@
     taskCenterBtn.addEventListener("click", loadTaskCenter);
     taskCenterSideBtn.addEventListener("click", loadTaskCenter);
     document.getElementById("tasksBody").addEventListener("click", async (event) => {
+      const viewTaskButton = event.target.closest("[data-view-task]");
+      if (viewTaskButton) {
+        const taskId = viewTaskButton.getAttribute("data-view-task");
+        selectedTaskId = selectedTaskId === taskId ? null : taskId;
+        renderTaskCenter(taskCenterState);
+        return;
+      }
       const llmTaskButton = event.target.closest("[data-llm-task]");
       if (llmTaskButton) {
         llmTaskButton.disabled = true;
@@ -906,7 +956,10 @@
         if (!result.ok) throw new Error(await result.text());
         const payload = await result.json();
         document.getElementById("raw").textContent = JSON.stringify(payload, null, 2);
-        await loadTaskCenter();
+        taskCenterState.tasks = (taskCenterState.tasks || []).filter((task) => task.id !== taskId);
+        taskCenterState.logs = (taskCenterState.logs || []).filter((log) => log.task_id !== taskId);
+        if (selectedTaskId === taskId) selectedTaskId = null;
+        renderTaskCenter(taskCenterState);
       } catch (error) {
         document.getElementById("raw").textContent = String(error);
       } finally {

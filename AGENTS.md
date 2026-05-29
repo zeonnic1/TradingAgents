@@ -189,9 +189,162 @@ CLI 会把中间消息、工具调用和报告片段写入结果目录。报告�
 - `.idea/` 是未跟踪目录。
 
 本文件只记录项目知识，不代表代码行为变更。
-## 交易所
-实时获取交易所k线数据,符合
+## Crypto Trading Hub 交易系统理解
 
-## 技术分析
-大周期HTF是小周的LTF的 4倍
-永远以大周期的POI为支撑，在小周期寻找机会
+本节是后续实现 `tradingagents/crypto/strategys/` 的硬性上下文。策略代码必须按这里的交易语义推进，不能用简化窗口统计替代结构逻辑。
+
+### 代码边界
+
+- 策略层只判断行情条件是否满足，不负责交易开关、订单金额、API key、账户余额和下单。
+- 任务层负责轮询、状态流转、LLM 开关、下单和订单监听。
+- K 线数据由服务层获取和缓存，策略只消费 candles。
+- Trading Hub 的每个概念都要逐步规则化实现，不能只停留在文档描述。
+
+### 核心流程
+
+标准交易流程：
+
+```text
+Daily bias / HTF bias
+-> HTF 流动性或 POI
+-> LTF 等待流动性清扫
+-> LTF CHOCH / BOS
+-> FVG / OB / 未缓解 POI
+-> 回调入场
+-> 目标流动性
+```
+
+策略判断顺序：
+
+1. 确认当前使用的周期组合，HTF 通常是 LTF 的 4 倍或更高一级。
+2. 永远以 HTF 的方向、POI、流动性目标为背景。
+3. LTF 只负责寻找精确入场机会，不单独决定方向。
+4. 没有 HTF 背景时，LTF 信号质量下降，应保持 `hold` 或降低权重。
+
+### Daily Bias
+
+- Daily bias 不是预测，而是定义当天优先等待哪一侧交易。
+- 上涨背景下，突破并收盘高于昨日高点，通常继续看向更高流动性。
+- 突破昨日高点后又收回昨日高点下方，可能是扫流动性后的反转。
+- 看跌逻辑反向处理。
+- 方向不清晰时，不应强制在小周期交易。
+
+### BOS 与动态结构点
+
+BOS 必须以“有效回调 + 再次突破/跌破关键结构点”为前提。没有有效回调，不能确认新的 BOS。
+
+结构 high / low 不能用固定 window 最高价 / 最低价代替。正确结构点来自最新有效 BOS：
+
+- Bearish BOS：价格经过有效回调后再次跌破前一个有效低点，并形成更低的低点；被跌破前低到这个更低低点之间的反弹最高点，是当前关注的结构 high，也是后续等待被清扫的 buy-side liquidity。
+- Bullish BOS：价格经过有效回调后再次突破前一个有效高点，并形成更高的高点；被突破前高到这个更高高点之间的回调最低点，是当前关注的结构 low，也是后续等待被清扫的 sell-side liquidity。
+
+实现必须保存或计算：
+
+- BOS 方向。
+- BOS 断点价格。
+- BOS 断点 K 线位置。
+- BOS 后到当前价格之间的动态结构 high / low。
+- 该 high / low 是否被清扫。
+
+禁止事项：
+
+- 禁止只用最近 N 根 K 线最高/最低作为结构 high / low。
+- 禁止用 `_recent_range(candles, lookback=20)` 直接代表 liquidity sweep 结构点。
+- 禁止没有有效回调就确认 BOS。
+
+### 流动性清扫
+
+- 流动性是系统核心，价格经常先扫一侧流动性，再朝真实方向运行。
+- 流动性清扫必须针对 BOS 后动态结构 high / low，而不是任意窗口极值。
+- Bearish 背景下，等待价格反弹清扫 BOS 后形成的结构 high。
+- Bullish 背景下，等待价格回落清扫 BOS 后形成的结构 low。
+- 日志中的“等待价格清扫 low_high”必须输出这个动态结构 high / low。
+
+### IDM / Inducement
+
+- IDM 是防止过早进场的核心。
+- BOS 后第一波回调经常是 IDM。
+- 没有取走 IDM 前，许多 OB / POI 可能只是陷阱。
+- 策略应区分 minor IDM 和 major IDM，并记录当前是否已取走诱因。
+
+### POI / OB / FVG
+
+高质量 POI 通常满足：
+
+- 是造成 MSB / CHOCH 的最后一根异色 K 线。
+- 之前存在流动性清扫或 IDM 被取走。
+- 后面有 FVG / imbalance。
+- 位于 HTF 关键区域、日线高低点、周线高低点、支撑阻力互换区或 Vegas 通道附近。
+- 第一次回到 POI 的反应最重要。
+
+低质量 POI：
+
+- 没有流动性或诱因。
+- 没有 FVG / imbalance。
+- 不在关键结构位置。
+- 只由固定窗口极值推导。
+
+### Premium / Discount
+
+- Bullish 背景下，优先在 discount 区找多。
+- Bearish 背景下，优先在 premium 区找空。
+- PD 不直接触发交易，只用于过滤位置质量。
+
+### LTF 入场
+
+LTF 入场必须建立在 HTF 背景上：
+
+1. HTF 到达或接近 POI。
+2. LTF 清扫动态结构流动性。
+3. LTF 出现 CHOCH / BOS。
+4. LTF 产生 FVG 或未缓解 OB。
+5. 回调到 FVG / OB / 极限 OB 时才考虑入场。
+
+LTF 的 CHOCH 可比 HTF 更灵活，但不能脱离 HTF POI 和流动性背景。
+
+### Flip 与失败处理
+
+- 如果预期 POI 失败，并且价格取走有效回调流动性、打破相反结构，应切换为 Flip 模型。
+- Flip 不是随意反手，而是确认原供需区失败后的方向切换。
+- 任务日志和策略 metadata 应能说明 POI 是否失败、失败后是否满足 Flip 条件。
+
+### Vegas 与 EMA
+
+- Vegas 通道使用 EMA144 / EMA169 判断趋势轨道。
+- EMA12 用于确认通道支撑或压制是否有效。
+- EMA50 是趋势恢复和回调过滤工具。
+- EMA / Vegas 只能作为过滤和加分项，不能单独触发交易。
+
+### 高概率 Setup
+
+高质量 setup 应尽量满足：
+
+- Daily / HTF bias 清晰。
+- HTF 已到达或清扫关键流动性。
+- 价格处于 HTF POI、OB、FVG、IFC、日线高低点或 Vegas 通道附近。
+- IDM / ENGL / EQH / EQL 被取走。
+- LTF 出现 CHOCH / BOS。
+- LTF 存在 FVG / 未缓解 OB。
+- 入场处于 PD 有利区域。
+- TP 指向明确内部或外部流动性。
+
+### 程序化输出要求
+
+策略结果 metadata 应逐步补齐：
+
+- `htf_timeframe`
+- `ltf_timeframe`
+- `daily_bias`
+- `bos_direction`
+- `bos_break_price`
+- `bos_break_index`
+- `dynamic_structure_high`
+- `dynamic_structure_low`
+- `liquidity_swept`
+- `idm_taken`
+- `poi_type`
+- `poi_range`
+- `pd_zone`
+- `choch_confirmed`
+- `fvg_exists`
+- `setup_quality`
