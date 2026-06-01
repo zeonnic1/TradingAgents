@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from statistics import mean
 from typing import Iterable, List, Optional
+
+import numpy as np
+import pandas as pd
 
 from tradingagents.crypto.models import Candle, SignalAction, TradingHubAnalysis
 from tradingagents.crypto.strategys.base import BaseStrategy, StrategyContext
 
 
-BOS_LOOKBACK_CANDLES = 120
+BOS_LOOKBACK_CANDLES = 1000
 
 
 @dataclass(frozen=True)
@@ -51,8 +53,8 @@ class TradingHubIndicatorMixin:
 class TradingHubStructureMixin:
     """Trading Hub 结构识别能力。"""
 
-    def latest_bos_structure(self, candles: List[Candle]) -> Optional[BosStructure]:
-        return _latest_bos_structure(candles)
+    def latest_bos_structure(self, candles: List[Candle], preferred_direction: Optional[str] = None) -> Optional[BosStructure]:
+        return _latest_bos_structure(candles, preferred_direction=preferred_direction)
 
 
 class TradingHubAnalysisMixin:
@@ -66,6 +68,7 @@ class TradingHubAnalysisMixin:
         ema144: Optional[float],
         ema169: Optional[float],
         vegas_bias: str,
+        daily_bias: str,
         ema50_bias: str,
         latest_bos: Optional[BosStructure],
         buy_side_sweep: bool,
@@ -81,6 +84,7 @@ class TradingHubAnalysisMixin:
             ema144=ema144,
             ema169=ema169,
             vegas_bias=vegas_bias,
+            daily_bias=daily_bias,
             ema50_bias=ema50_bias,
             latest_bos=latest_bos,
             buy_side_sweep=buy_side_sweep,
@@ -145,8 +149,9 @@ class TradingHubStrategy(TradingHubAnalysisMixin, TradingHubStructureMixin, Trad
         ema144 = self.ema(closed_closes, 144)
         ema169 = self.ema(closed_closes, 169)
         vegas_bias = self.vegas_bias(ema144, ema169)
+        daily_bias = _daily_bias(context.daily_candles, fallback=vegas_bias)
         ema50_bias = "bullish" if ema50 is not None and signal_candle.close >= ema50 else "bearish" if ema50 is not None else "neutral"
-        latest_bos = self.latest_bos_structure(candles)
+        latest_bos = self.latest_bos_structure(candles, preferred_direction=_preferred_bos_direction(daily_bias))
         #FIXME 这里判断收盘逻辑不应该是chock,chock代表结构反转，这里只是收盘
         choch_up = signal_candle.close > previous_closed.high
         choch_down = signal_candle.close < previous_closed.low
@@ -171,6 +176,7 @@ class TradingHubStrategy(TradingHubAnalysisMixin, TradingHubStructureMixin, Trad
             ema144=ema144,
             ema169=ema169,
             vegas_bias=vegas_bias,
+            daily_bias=daily_bias,
             ema50_bias=ema50_bias,
             latest_bos=latest_bos,
             buy_side_sweep=buy_side_sweep,
@@ -189,7 +195,7 @@ class TradingHubStrategy(TradingHubAnalysisMixin, TradingHubStructureMixin, Trad
         if latest_bos is None:
             reason = "No valid BOS was detected; waiting for effective pullback and structural break."
             setup = "no_valid_bos"
-            bias = vegas_bias
+            bias = daily_bias
         else:
             reason = (
                 "Waiting for price to sweep the BOS-derived dynamic structure "
@@ -297,7 +303,7 @@ def _bearish_sweep_analysis(
     )
 
 
-def _latest_bos_structure(candles: List[Candle]) -> Optional[BosStructure]:
+def _latest_bos_structure(candles: List[Candle], preferred_direction: Optional[str] = None) -> Optional[BosStructure]:
     swings = _swing_points(candles[:-1])
     min_index = max(0, len(candles) - BOS_LOOKBACK_CANDLES)
     bos_candidates: List[BosStructure] = []
@@ -305,23 +311,27 @@ def _latest_bos_structure(candles: List[Candle]) -> Optional[BosStructure]:
     swing_highs = [point for point in swings if point.kind == "high" and point.index >= min_index]
 
     for swing_low in swing_lows:
-        pullback = _first_swing_after(swing_highs, swing_low.index)
-        if pullback is None or not _is_effective_pullback(candles, "bearish", swing_low, pullback):
-            continue
-        break_index = _first_low_break_below(candles, start=pullback.index + 1, price=swing_low.price)
-        if break_index is None or break_index >= len(candles) - 2:
-            continue
-        bos_candidates.append(_build_bos_structure(candles, "bearish", swing_low, pullback, break_index))
+        for pullback in _swings_after(swing_highs, swing_low.index):
+            if not _is_effective_pullback(candles, "bearish", swing_low, pullback):
+                continue
+            lower_low = _current_break_swing_after(swing_lows, start=pullback.index + 1, price=swing_low.price, direction="bearish")
+            if lower_low is None or lower_low.index >= len(candles) - 2:
+                continue
+            bos_candidates.append(_build_bos_structure(candles, "bearish", swing_low, pullback, lower_low.index))
+            break
 
     for swing_high in swing_highs:
-        pullback = _first_swing_after(swing_lows, swing_high.index)
-        if pullback is None or not _is_effective_pullback(candles, "bullish", swing_high, pullback):
-            continue
-        break_index = _first_high_break_above(candles, start=pullback.index + 1, price=swing_high.price)
-        if break_index is None or break_index >= len(candles) - 2:
-            continue
-        bos_candidates.append(_build_bos_structure(candles, "bullish", swing_high, pullback, break_index))
+        for pullback in _swings_after(swing_lows, swing_high.index):
+            if not _is_effective_pullback(candles, "bullish", swing_high, pullback):
+                continue
+            higher_high = _current_break_swing_after(swing_highs, start=pullback.index + 1, price=swing_high.price, direction="bullish")
+            if higher_high is None or higher_high.index >= len(candles) - 2:
+                continue
+            bos_candidates.append(_build_bos_structure(candles, "bullish", swing_high, pullback, higher_high.index))
+            break
 
+    if preferred_direction in {"bearish", "bullish"}:
+        bos_candidates = [candidate for candidate in bos_candidates if candidate.direction == preferred_direction]
     if not bos_candidates:
         return None
     bos_candidates = _dedupe_equal_bos_candidates(bos_candidates)
@@ -383,14 +393,24 @@ def _build_bos_structure(
 
 def _swing_points(candles: List[Candle], left: int = 2, right: int = 2) -> List[SwingPoint]:
     points: List[SwingPoint] = []
+    frame = _candles_frame(candles)
+    if frame.empty:
+        return points
+    highs = frame["high"].to_numpy(dtype=float)
+    lows = frame["low"].to_numpy(dtype=float)
     for index in range(left, len(candles) - right):
-        current = candles[index]
-        window = candles[index - left:index + right + 1]
-        right_window = candles[index + 1:index + right + 1]
-        if current.high == max(candle.high for candle in window) and all(current.high > candle.high for candle in right_window):
-            points.append(SwingPoint(index=index, price=current.high, kind="high"))
-        if current.low == min(candle.low for candle in window) and all(current.low < candle.low for candle in right_window):
-            points.append(SwingPoint(index=index, price=current.low, kind="low"))
+        current_high = highs[index]
+        current_low = lows[index]
+        window_highs = highs[index - left:index + right + 1]
+        window_lows = lows[index - left:index + right + 1]
+        left_highs = highs[index - left:index]
+        left_lows = lows[index - left:index]
+        right_highs = highs[index + 1:index + right + 1]
+        right_lows = lows[index + 1:index + right + 1]
+        if current_high == np.max(window_highs) and bool(np.all(current_high > left_highs)) and bool(np.all(current_high > right_highs)):
+            points.append(SwingPoint(index=index, price=float(current_high), kind="high"))
+        if current_low == np.min(window_lows) and bool(np.all(current_low < left_lows)) and bool(np.all(current_low < right_lows)):
+            points.append(SwingPoint(index=index, price=float(current_low), kind="low"))
     return sorted(points, key=lambda point: point.index)
 
 
@@ -401,8 +421,37 @@ def _first_swing_after(points: List[SwingPoint], index: int) -> Optional[SwingPo
     return None
 
 
+def _swings_after(points: List[SwingPoint], index: int) -> List[SwingPoint]:
+    return [point for point in points if point.index > index]
+
+
+def _current_break_swing_after(points: List[SwingPoint], start: int, price: float, direction: str) -> Optional[SwingPoint]:
+    broken_points = [
+        point
+        for point in points
+        if point.index >= start
+        and (
+            (direction == "bearish" and point.price < price)
+            or (direction == "bullish" and point.price > price)
+        )
+    ]
+    if not broken_points:
+        return None
+    if direction == "bearish":
+        current = min(broken_points, key=lambda point: (point.price, -point.index))
+        first_break = min(broken_points, key=lambda point: point.index)
+        return current if current.index == first_break.index else None
+    if direction == "bullish":
+        current = max(broken_points, key=lambda point: (point.price, point.index))
+        first_break = min(broken_points, key=lambda point: point.index)
+        return current if current.index == first_break.index else None
+    return None
+
+
 def _is_effective_pullback(candles: List[Candle], bos_direction: str, broken_swing: SwingPoint, pullback: SwingPoint) -> bool:
     if pullback.index <= broken_swing.index + 1:
+        return False
+    if _structure_already_broken_before_pullback(candles, bos_direction, broken_swing, pullback):
         return False
 
     segment = candles[broken_swing.index:pullback.index + 1]
@@ -419,55 +468,78 @@ def _is_effective_pullback(candles: List[Candle], bos_direction: str, broken_swi
     return False
 
 
+def _structure_already_broken_before_pullback(
+    candles: List[Candle],
+    bos_direction: str,
+    broken_swing: SwingPoint,
+    pullback: SwingPoint,
+) -> bool:
+    between = candles[broken_swing.index + 1:pullback.index]
+    if not between:
+        return False
+    if bos_direction == "bearish":
+        return bool(np.any(_candle_values(between, "low") < float(broken_swing.price)))
+    if bos_direction == "bullish":
+        return bool(np.any(_candle_values(between, "high") > float(broken_swing.price)))
+    return False
+
+
 def _minimum_pullback_distance(candles: List[Candle], start: int, end: int) -> float:
     left = max(1, start - 10)
     right = min(len(candles), end + 1)
-    ranges = [abs(candles[index].high - candles[index].low) for index in range(left, right)]
-    avg_range = mean(ranges) if ranges else 0.0
+    frame = _candles_frame(candles[left:right])
+    ranges = (frame["high"] - frame["low"]).abs().to_numpy(dtype=float) if not frame.empty else np.array([], dtype=float)
+    avg_range = float(np.mean(ranges)) if ranges.size else 0.0
     price = max(abs(candles[start].close), 1.0)
-    return max(avg_range * 0.5, price * 0.001)
+    return float(max(avg_range * 0.5, price * 0.001))
 
 
 def _breaks_internal_structure_up(candles: List[Candle], start: int, end: int) -> bool:
-    for index in range(max(start, 1), min(end, len(candles) - 1) + 1):
-        if candles[index].high > candles[index - 1].high:
-            return True
-    return False
+    begin = max(start, 1)
+    finish = min(end, len(candles) - 1)
+    if begin > finish:
+        return False
+    highs = _candle_values(candles, "high")
+    return bool(np.any(highs[begin:finish + 1] > highs[begin - 1:finish]))
 
 
 def _breaks_internal_structure_down(candles: List[Candle], start: int, end: int) -> bool:
-    for index in range(max(start, 1), min(end, len(candles) - 1) + 1):
-        if candles[index].low < candles[index - 1].low:
-            return True
-    return False
+    begin = max(start, 1)
+    finish = min(end, len(candles) - 1)
+    if begin > finish:
+        return False
+    lows = _candle_values(candles, "low")
+    return bool(np.any(lows[begin:finish + 1] < lows[begin - 1:finish]))
 
 
 def _first_low_break_below(candles: List[Candle], start: int, price: float) -> Optional[int]:
-    for index in range(max(start, 0), len(candles)):
-        if candles[index].low < price:
-            return index
-    return None
+    offset = max(start, 0)
+    lows = _candle_values(candles, "low")
+    matches = np.flatnonzero(lows[offset:] < float(price))
+    return int(offset + matches[0]) if matches.size else None
 
 
 def _first_high_break_above(candles: List[Candle], start: int, price: float) -> Optional[int]:
-    for index in range(max(start, 0), len(candles)):
-        if candles[index].high > price:
-            return index
-    return None
+    offset = max(start, 0)
+    highs = _candle_values(candles, "high")
+    matches = np.flatnonzero(highs[offset:] > float(price))
+    return int(offset + matches[0]) if matches.size else None
 
 
 def _highest_point(candles: List[Candle], offset: int) -> Optional[SwingPoint]:
     if not candles:
         return None
-    local_index, candle = max(enumerate(candles), key=lambda item: item[1].high)
-    return SwingPoint(index=offset + local_index, price=candle.high, kind="high")
+    frame = _candles_frame(candles)
+    local_index = int(frame["high"].idxmax())
+    return SwingPoint(index=offset + local_index, price=float(frame.at[local_index, "high"]), kind="high")
 
 
 def _lowest_point(candles: List[Candle], offset: int) -> Optional[SwingPoint]:
     if not candles:
         return None
-    local_index, candle = min(enumerate(candles), key=lambda item: item[1].low)
-    return SwingPoint(index=offset + local_index, price=candle.low, kind="low")
+    frame = _candles_frame(candles)
+    local_index = int(frame["low"].idxmin())
+    return SwingPoint(index=offset + local_index, price=float(frame.at[local_index, "low"]), kind="low")
 
 
 def _find_poi_ob(
@@ -482,6 +554,8 @@ def _find_poi_ob(
             if candles[index].close <= dynamic_high.price:
                 continue
             if dynamic_high.price > candles[index].low:
+                continue
+            if _ob_contained_by_previous_candles(candles, index):
                 continue
             fvg = _bearish_fvg_after(candles, index)
             if fvg is None:
@@ -498,6 +572,8 @@ def _find_poi_ob(
         for index in range(broken_swing_index - 1, -1, -1):
             if candles[index].close >= dynamic_low.price:
                 continue
+            if _ob_contained_by_previous_candles(candles, index):
+                continue
             fvg = _bullish_fvg_after(candles, index)
             if fvg is None:
                 continue
@@ -510,6 +586,18 @@ def _find_poi_ob(
                 "fvg_index": index + 1,
             }
     return None
+
+
+def _ob_contained_by_previous_candles(candles: List[Candle], index: int, lookback: int = 3) -> bool:
+    if index <= 0:
+        return False
+    ob_low = candles[index].low
+    ob_high = candles[index].high
+    start = max(0, index - lookback)
+    for previous in candles[start:index]:
+        if previous.low <= ob_low and previous.high >= ob_high:
+            return True
+    return False
 
 
 def _bearish_fvg_after(candles: List[Candle], index: int) -> Optional[tuple[float, float]]:
@@ -532,6 +620,58 @@ def _bullish_fvg_after(candles: List[Candle], index: int) -> Optional[tuple[floa
     return None
 
 
+def _preferred_bos_direction(daily_bias: str) -> Optional[str]:
+    if daily_bias in {"bearish", "bullish"}:
+        return daily_bias
+    return None
+
+
+def _daily_bias(daily_candles: Optional[List[Candle]], fallback: str = "neutral") -> str:
+    if not daily_candles or len(daily_candles) < 4:
+        return fallback
+    # 交易所 OHLCV 最后一根 1d 通常是当天未收盘 K 线，不能用它确认日线偏见。
+    closed = daily_candles[:-1]
+    latest = closed[-1]
+    previous = closed[-2]
+    if latest.close < latest.open:
+        return "bearish"
+    if latest.close > latest.open:
+        return "bullish"
+    if latest.high > previous.high and latest.close < previous.high:
+        return "bearish"
+    if latest.low < previous.low and latest.close > previous.low:
+        return "bullish"
+    if latest.close < previous.low:
+        return "bearish"
+    if latest.close > previous.high:
+        return "bullish"
+    return fallback
+
+
+def _candles_frame(candles: List[Candle]) -> pd.DataFrame:
+    return pd.DataFrame.from_records(
+        (
+            {
+                "timestamp": candle.timestamp,
+                "open": candle.open,
+                "high": candle.high,
+                "low": candle.low,
+                "close": candle.close,
+                "volume": candle.volume,
+            }
+            for candle in candles
+        ),
+        columns=["timestamp", "open", "high", "low", "close", "volume"],
+    )
+
+
+def _candle_values(candles: List[Candle], field: str) -> np.ndarray:
+    frame = _candles_frame(candles)
+    if frame.empty:
+        return np.array([], dtype=float)
+    return frame[field].to_numpy(dtype=float)
+
+
 def _metadata(
     *,
     ema12: Optional[float],
@@ -539,6 +679,7 @@ def _metadata(
     ema144: Optional[float],
     ema169: Optional[float],
     vegas_bias: str,
+    daily_bias: str,
     ema50_bias: str,
     latest_bos: Optional[BosStructure],
     buy_side_sweep: bool,
@@ -551,7 +692,7 @@ def _metadata(
     data = {
         "htf_timeframe": None,
         "ltf_timeframe": None,
-        "daily_bias": vegas_bias,
+        "daily_bias": daily_bias,
         "ema12": ema12,
         "ema50": ema50,
         "ema144": ema144,
@@ -637,14 +778,14 @@ def _vegas_bias(ema144: Optional[float], ema169: Optional[float]) -> str:
 
 
 def _ema(values: Iterable[float], period: int) -> Optional[float]:
-    data = list(values)
-    if len(data) < period:
+    series = pd.Series(list(values), dtype="float64").dropna()
+    if len(series) < period:
         return None
     alpha = 2 / (period + 1)
-    ema = mean(data[:period])
-    for value in data[period:]:
+    ema = float(series.iloc[:period].mean())
+    for value in series.iloc[period:].to_numpy(dtype=float):
         ema = alpha * value + (1 - alpha) * ema
-    return ema
+    return float(ema)
 
 
 def _confidence(score: int, max_score: int = 7) -> float:

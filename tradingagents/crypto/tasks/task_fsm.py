@@ -7,8 +7,7 @@ class TaskStatus(str, Enum):
     """任务生命周期的唯一状态枚举。
 
     这里使用有限状态机（FSM）约束状态流转，避免任务被业务代码随意改成
-    不合理状态。例如任务必须先从 PENDING 进入 ORDERED，不能直接跳到
-    COMPLETED；终态任务也不能再被修改。
+        不合理状态。例如已进入终态的任务不能再回写为 PENDING 或 ORDERED。
     """
 
     PENDING = "PENDING"
@@ -45,14 +44,15 @@ class StateMachine:
     """集中校验任务状态流转。
 
     合法路径：
-    - PENDING -> ORDERED：任务被 worker 接单并开始处理
+    - PENDING -> ORDERED：策略满足并已下单，进入订单监听
+    - PENDING -> COMPLETED：策略轮询阶段正常终止，例如 POI 已消费，无需下单
     - PENDING -> CANCELED/FAILED：任务尚未执行时取消或提交失败
     - ORDERED -> COMPLETED/FAILED/CANCELED：处理中任务进入终态
     - 终态不可再流转，保证结果不会被后续异步回写覆盖
     """
 
     transitions = {
-        TaskStatus.PENDING: {TaskStatus.ORDERED, TaskStatus.CANCELED, TaskStatus.FAILED},
+        TaskStatus.PENDING: {TaskStatus.ORDERED, TaskStatus.COMPLETED, TaskStatus.CANCELED, TaskStatus.FAILED},
         TaskStatus.ORDERED: {TaskStatus.COMPLETED, TaskStatus.CANCELED, TaskStatus.FAILED},
         TaskStatus.COMPLETED: set(),
         TaskStatus.CANCELED: set(),

@@ -66,6 +66,7 @@ class PaperExchangeClient:
                 "margin_usdt": request.amount,
                 "notional_usdt": request.amount * request.leverage,
                 "contract_amount": contract_amount,
+                "params": request.params,
             },
         }
 
@@ -185,7 +186,10 @@ def _ccxt_client(exchange: ExchangeName, authenticated: bool = False) -> _CcxtAd
         ExchangeName.BYBIT: "bybit",
     }[exchange]
     exchange_cls = getattr(ccxt, ccxt_id)
-    options: Dict[str, Any] = {"enableRateLimit": True}
+    options: Dict[str, Any] = {
+        "enableRateLimit": True,
+        "options": _ccxt_contract_options(exchange),
+    }
     if authenticated:
         missing = missing_exchange_credentials(exchange)
         if missing:
@@ -195,3 +199,21 @@ def _ccxt_client(exchange: ExchangeName, authenticated: bool = False) -> _CcxtAd
         options.update({k: v for k, v in creds.items() if v})
     raw = exchange_cls(options)
     return _CcxtAdapter(raw)
+
+
+def _ccxt_contract_options(exchange: ExchangeName) -> Dict[str, Any]:
+    if exchange == ExchangeName.BINANCE:
+        return {
+            "defaultType": "future",
+            "defaultSubType": "linear",
+        }
+    if exchange == ExchangeName.OKX:
+        return {
+            "defaultType": "swap",
+        }
+    if exchange == ExchangeName.BYBIT:
+        return {
+            "defaultType": "swap",
+            "defaultSubType": "linear",
+        }
+    return {}

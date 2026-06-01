@@ -26,6 +26,7 @@ from tradingagents.crypto.services.service import (
 from tradingagents.crypto.tasks.task_service import cancel_task as cancel_task_service
 from tradingagents.crypto.tasks.task_service import delete_task as delete_task_service
 from tradingagents.crypto.tasks.task_service import submit_task as submit_task_service
+from tradingagents.crypto.tasks.task_service import trigger_manual_decision_order
 
 
 manager = ConnectionManager()
@@ -177,11 +178,23 @@ def task_llm_decision(task_id: str):
         append_task_log(task_id, "info", "LLM decision completed.", {
             "approved": result["llm_decision"]["decision"]["approved"],
             "action": result["llm_decision"]["decision"]["action"],
+            "task_conclusion": result["llm_decision"].get("task_conclusion"),
+            "prompt_messages": result["llm_decision"].get("prompt_messages"),
         })
         return result
     except Exception as exc:
         append_task_log(task_id, "error", "LLM decision failed.", {"error": str(exc)})
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/tasks/{task_id}/decision-order", response_model=TaskResponse)
+def task_manual_decision_order(task_id: str):
+    return trigger_manual_decision_order(task_id, use_llm=False)
+
+
+@app.post("/api/tasks/{task_id}/llm-decision-order", response_model=TaskResponse)
+def task_llm_decision_order(task_id: str):
+    return trigger_manual_decision_order(task_id, use_llm=True)
 
 
 @app.post("/api/tasks/{task_id}/cancel", response_model=TaskResponse)

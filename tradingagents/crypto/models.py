@@ -197,3 +197,5 @@ class LLMDecisionResponse(BaseModel):
     eligible: bool
     decision: CryptoLLMDecision
     rule_payload: Dict[str, Any]
+    task_conclusion: Dict[str, Any] = Field(default_factory=dict)
+    prompt_messages: List[Dict[str, str]] = Field(default_factory=list)

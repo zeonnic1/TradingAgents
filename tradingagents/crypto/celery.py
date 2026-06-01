@@ -67,6 +67,34 @@ def run_bot_once_task(payload: dict):
         raise
 
 
+@celery_app.task(name="tradingagents.crypto.manual_decision_order")
+def manual_decision_order_task(target_task_id: str):
+    """Run manual direct order placement for an existing task.
+
+    The Celery task id is only the worker job id. All status/log/order updates
+    are written to the original task identified by target_task_id.
+    """
+
+    try:
+        handler = TaskFactory.create("crypto_bot_run")
+        return handler.manual_decision_order(target_task_id, use_llm=False)
+    except Exception as exc:
+        _fail_task(target_task_id, exc)
+        raise
+
+
+@celery_app.task(name="tradingagents.crypto.llm_decision_order")
+def llm_decision_order_task(target_task_id: str):
+    """Run LLM-reviewed order placement for an existing completed task."""
+
+    try:
+        handler = TaskFactory.create("crypto_bot_run")
+        return handler.manual_decision_order(target_task_id, use_llm=True)
+    except Exception as exc:
+        _fail_task(target_task_id, exc)
+        raise
+
+
 def _fail_task(task_id: str, exc: Exception) -> None:
     current = get_task_record(task_id)
     if current and current.status == TaskStatus.CANCELED.value:

@@ -247,11 +247,11 @@
         <div class="row">
           <div>
             <label for="amount">合约金额 (USDT)</label>
-            <input id="amount" name="amount" type="number" min="0" step="1" value="0" />
+            <input id="amount" name="amount" type="number" min="0" step="1" value="100" />
           </div>
           <div>
             <label for="leverage">合约杠杆</label>
-            <input id="leverage" name="leverage" type="number" min="1" max="125" value="1" />
+            <input id="leverage" name="leverage" type="number" min="1" max="125" value="10" />
           </div>
         </div>
 
@@ -379,12 +379,13 @@
                 <th>LLM开关</th>
                 <th>详情</th>
                 <th>LLM</th>
+                <th>决策挂单</th>
                 <th>操作</th>
                 <th>删除</th>
               </tr>
             </thead>
             <tbody id="tasksBody">
-              <tr><td colspan="14" class="muted">暂无任务。</td></tr>
+              <tr><td colspan="15" class="muted">暂无任务。</td></tr>
             </tbody>
           </table>
         </div>
@@ -468,6 +469,8 @@
         <p id="llmTrader">-</p>
         <div class="muted">Portfolio Manager</div>
         <p id="llmPortfolio">-</p>
+        <div class="muted">任务结论</div>
+        <pre id="llmConclusion">-</pre>
         <ul class="list" id="llmWarnings"><li>暂无风控提示。</li></ul>
       </div>
 
@@ -555,6 +558,7 @@
       document.getElementById("llmTp2").textContent = formatNumber(decision.take_profit_2);
       document.getElementById("llmTrader").textContent = decision.trader_rationale || "-";
       document.getElementById("llmPortfolio").textContent = decision.portfolio_rationale || "-";
+      document.getElementById("llmConclusion").textContent = JSON.stringify(payload.task_conclusion || {}, null, 2);
       const warnings = document.getElementById("llmWarnings");
       warnings.innerHTML = "";
       (decision.warnings || ["暂无风控提示。"]).forEach((warning) => {
@@ -631,17 +635,22 @@
         selectedTaskId = null;
       }
       if (!tasks.length) {
-        tasksBody.innerHTML = '<tr><td colspan="14" class="muted">暂无任务。</td></tr>';
+        tasksBody.innerHTML = '<tr><td colspan="15" class="muted">暂无任务。</td></tr>';
       } else {
         tasks.forEach((task) => {
           const shortId = task.id ? task.id.slice(0, 8) : "-";
           const status = String(task.status || "").toUpperCase();
           const canCancel = ["PENDING", "ORDERED"].includes(status);
           const canReview = !["CANCELED", "FAILED"].includes(status);
+          const hasTaskResult = Boolean(task.result || task.result_data);
+          const canDecisionOrder = status === "COMPLETED" && hasTaskResult && task.execute && Number(task.amount || 0) > 0;
           const canDelete = ["COMPLETED", "CANCELED", "FAILED"].includes(status);
           const reviewLabel = task.result?.llm_decision ? "重跑LLM" : "LLM决策";
           const reviewText = canReview
             ? `<button class="secondary compact" type="button" data-llm-task="${task.id}">${reviewLabel}</button>`
+            : "-";
+          const decisionOrderText = canDecisionOrder
+            ? `<button class="compact" type="button" data-decision-order-task="${task.id}">手动挂单</button> <button class="secondary compact" type="button" data-llm-order-task="${task.id}">LLM挂单</button>`
             : "-";
           const tr = document.createElement("tr");
           tr.innerHTML = `
@@ -657,6 +666,7 @@
             <td>${task.use_llm_decision ? "启用" : "禁用"}</td>
             <td><button class="secondary compact" type="button" data-view-task="${task.id}">${task.id === selectedTaskId ? "查看中" : "详情"}</button></td>
             <td>${reviewText}</td>
+            <td>${decisionOrderText}</td>
             <td>${canCancel ? `<button class="danger compact" type="button" data-cancel-task="${task.id}">取消</button>` : "-"}</td>
             <td>${canDelete ? `<button class="ghost compact" type="button" data-delete-task="${task.id}">删除</button>` : "-"}</td>
           `;
@@ -664,7 +674,7 @@
           if (task.id === selectedTaskId) {
             const detailRow = document.createElement("tr");
             detailRow.className = "task-detail-row";
-            detailRow.innerHTML = `<td colspan="14">${renderTaskDetail(payload, task)}</td>`;
+            detailRow.innerHTML = `<td colspan="15">${renderTaskDetail(payload, task)}</td>`;
             tasksBody.appendChild(detailRow);
           }
         });
@@ -675,6 +685,7 @@
 
     function renderTaskDetail(payload, task) {
       const logs = (payload.logs || []).filter((log) => log.task_id === task.id);
+      const llmAdvice = task.result?.llm_decision || task.result_data?.llm_decision;
       const rows = [];
       if (!logs.length) {
         rows.push('<tr><td colspan="4" class="muted">当前任务暂无日志。</td></tr>');
@@ -696,6 +707,7 @@
             <span>任务日志 ${task.id ? task.id.slice(0, 8) : "-"}</span>
             <span class="muted">${task.status || "-"} / ${task.symbol || "-"} / ${task.timeframe || "-"}</span>
           </div>
+          ${renderTaskLlmAdvice(llmAdvice)}
           <div class="table-wrap">
             <table>
               <thead>
@@ -709,6 +721,34 @@
               <tbody>${rows.join("")}</tbody>
             </table>
           </div>
+        </div>
+      `;
+    }
+
+    function renderTaskLlmAdvice(payload) {
+      if (!payload || !payload.decision) {
+        return '<div class="muted">暂无 LLM 建议。</div>';
+      }
+      const decision = payload.decision;
+      const conclusion = payload.task_conclusion || {};
+      return `
+        <div class="task-detail">
+          <div class="task-detail-title">
+            <span>LLM参考建议</span>
+            <span class="muted">${payload.provider || "-"} / ${payload.model || "-"}</span>
+          </div>
+          <div class="grid">
+            <div><div class="muted">批准</div><strong class="${decision.approved ? "positive" : "negative"}">${decision.approved ? "YES" : "NO"}</strong></div>
+            <div><div class="muted">动作</div><strong>${(decision.action || "-").toUpperCase()}</strong></div>
+            <div><div class="muted">风险</div><strong>${decision.risk_level || "-"}</strong></div>
+            <div><div class="muted">建议杠杆</div><strong>${decision.recommended_leverage || 1}x</strong></div>
+          </div>
+          <div class="muted">任务结论</div>
+          <pre>${JSON.stringify(conclusion, null, 2)}</pre>
+          <div class="muted">Trader</div>
+          <p>${decision.trader_rationale || "-"}</p>
+          <div class="muted">Portfolio Manager</div>
+          <p>${decision.portfolio_rationale || "-"}</p>
         </div>
       `;
     }
@@ -746,20 +786,30 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await readError(res));
       return res.json();
     }
 
     async function postEmpty(url) {
       const res = await fetch(url, { method: "POST" });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await readError(res));
       return res.json();
     }
 
     async function getJson(url) {
       const res = await fetch(url);
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await readError(res));
       return res.json();
+    }
+
+    async function readError(res) {
+      const text = await res.text();
+      try {
+        const payload = JSON.parse(text);
+        return payload.detail || text;
+      } catch {
+        return text || `${res.status} ${res.statusText}`;
+      }
     }
 
     async function loadBalance() {
@@ -929,6 +979,38 @@
           document.getElementById("raw").textContent = String(error);
         } finally {
           llmTaskButton.disabled = false;
+        }
+        return;
+      }
+      const decisionOrderButton = event.target.closest("[data-decision-order-task]");
+      if (decisionOrderButton) {
+        decisionOrderButton.disabled = true;
+        const taskId = decisionOrderButton.getAttribute("data-decision-order-task");
+        try {
+          const result = await postEmpty(`/api/tasks/${encodeURIComponent(taskId)}/decision-order`);
+          document.getElementById("raw").textContent = JSON.stringify(result, null, 2);
+          connectTaskSocket(taskId);
+          await loadTaskCenter();
+        } catch (error) {
+          document.getElementById("raw").textContent = String(error);
+        } finally {
+          decisionOrderButton.disabled = false;
+        }
+        return;
+      }
+      const llmOrderButton = event.target.closest("[data-llm-order-task]");
+      if (llmOrderButton) {
+        llmOrderButton.disabled = true;
+        const taskId = llmOrderButton.getAttribute("data-llm-order-task");
+        try {
+          const result = await postEmpty(`/api/tasks/${encodeURIComponent(taskId)}/llm-decision-order`);
+          document.getElementById("raw").textContent = JSON.stringify(result, null, 2);
+          connectTaskSocket(taskId);
+          await loadTaskCenter();
+        } catch (error) {
+          document.getElementById("raw").textContent = String(error);
+        } finally {
+          llmOrderButton.disabled = false;
         }
         return;
       }

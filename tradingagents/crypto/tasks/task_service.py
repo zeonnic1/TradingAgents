@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -92,3 +93,54 @@ def delete_task(task_id: str) -> TaskResponse:
         "progress": 100,
     })
     return TaskResponse(task_id=task_id, status="DELETED")
+
+
+def trigger_manual_decision_order(task_id: str, *, use_llm: bool = False) -> TaskResponse:
+    record = get_task_record(task_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    status = TaskStatus.normalize(record.status)
+    if status != TaskStatus.COMPLETED:
+        raise HTTPException(status_code=409, detail="Manual decision order is only allowed for COMPLETED tasks.")
+    if not (record.result or record.result_data):
+        raise HTTPException(status_code=409, detail="Completed task has no analysis result.")
+    if not record.execute:
+        raise HTTPException(status_code=409, detail="Task transaction mode is disabled.")
+    if record.amount <= 0:
+        raise HTTPException(status_code=409, detail="Task amount_usdt must be greater than 0.")
+
+    message = "LLM decision order enqueued." if use_llm else "Manual direct order enqueued."
+    append_task_log(task_id, "info", message, {
+        "symbol": record.symbol,
+        "amount_usdt": record.amount,
+        "leverage": record.leverage,
+        "use_llm": use_llm,
+    })
+    publish_task_status(task_id, {
+        "task_id": task_id,
+        "status": TaskStatus.COMPLETED.value,
+        "ready": False,
+        "progress": record.progress,
+        "log": {
+            "task_id": task_id,
+            "level": "info",
+            "message": message,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "context": {
+                "symbol": record.symbol,
+                "amount_usdt": record.amount,
+                "leverage": record.leverage,
+                "use_llm": use_llm,
+            },
+        },
+    })
+    try:
+        from tradingagents.crypto.celery import llm_decision_order_task, manual_decision_order_task
+
+        task = llm_decision_order_task if use_llm else manual_decision_order_task
+        task.apply_async(args=[task_id])
+    except Exception as exc:
+        update_task_record(task_id, TaskStatus.FAILED.value, error=str(exc), progress=100)
+        append_task_log(task_id, "error", "Order enqueue failed.", {"error": str(exc), "use_llm": use_llm})
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return TaskResponse(task_id=task_id, status=TaskStatus.COMPLETED.value)

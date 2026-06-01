@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 from tradingagents.crypto.models import Candle, TradingHubAnalysis
 
@@ -16,6 +16,7 @@ class StrategyContext:
     """
 
     candles: List[Candle]
+    daily_candles: Optional[List[Candle]] = None
 
 
 class BaseStrategy(ABC):

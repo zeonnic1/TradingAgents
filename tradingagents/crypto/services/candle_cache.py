@@ -99,7 +99,7 @@ class CandleCache:
         self.store = store or RedisCandleStore()
         self._initialized_keys: set[tuple[str, str, str]] = set()
 
-    def get_snapshot(self, request: AnalyzeRequest) -> MarketSnapshot:
+    def get_snapshot(self, request: AnalyzeRequest, *, refresh_full: bool = False) -> MarketSnapshot:
         client = get_exchange_client(request.exchange)
         key = _identity(request.exchange, request.symbol, request.timeframe)
         if key not in self._initialized_keys:
@@ -107,6 +107,9 @@ class CandleCache:
             initial_candles = client.fetch_ohlcv(request.symbol, request.timeframe, request.limit)
             self.store.save_many(request.exchange, request.symbol, request.timeframe, initial_candles)
             self._initialized_keys.add(key)
+        elif refresh_full and self.store.count(request.exchange, request.symbol, request.timeframe) < request.limit:
+            expanded_candles = client.fetch_ohlcv(request.symbol, request.timeframe, request.limit)
+            self.store.save_many(request.exchange, request.symbol, request.timeframe, expanded_candles)
 
         latest_candles = client.fetch_ohlcv(request.symbol, request.timeframe, 1)
         self.store.save_many(request.exchange, request.symbol, request.timeframe, latest_candles, update_existing=True)
